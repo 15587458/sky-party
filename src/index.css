@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+
+:root {
+  font-family: var(--font-sans);
+  --neon-purple: #9D00FF;
+}
+
+@theme {
+  --font-sans: "Montserrat", ui-sans-serif, system-ui, sans-serif;
+  --font-space: "Space Grotesk", sans-serif;
+  --font-playfair: "Playfair Display", serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-inter: "Inter", sans-serif;
+  --color-neon-purple: var(--neon-purple);
+  --color-neon-blue: #00D1FF;
+  --color-bg-dark: #000000;
+  --color-card-bg: #030303;
+}
+
+body {
+  @apply bg-bg-dark text-zinc-100 antialiased selection:bg-neon-purple/30;
+}
+
+.glow-purple {
+  box-shadow: 0 0 50px rgba(157, 0, 255, 0.2);
+}
+
+.text-gradient {
+  @apply bg-linear-to-r from-white to-zinc-500 bg-clip-text text-transparent;
+}
+
+/* Rich Text Editor Sizing classes */
+.rich-text-content font[size="1"] { font-size: 12px; }
+.rich-text-content font[size="2"] { font-size: 14px; }
+.rich-text-content font[size="3"] { font-size: 16px; }
+.rich-text-content font[size="4"] { font-size: 20px; }
+.rich-text-content font[size="5"] { font-size: 30px; }
+.rich-text-content font[size="6"] { font-size: 38px; }
+.rich-text-content font[size="7"] { font-size: 48px; }
+.rich-text-content b, .rich-text-content strong { font-weight: 700; }
+.rich-text-content p { margin-bottom: 0.75rem; }
+
+.rich-text-content:empty:before {
+  content: attr(data-placeholder);
+  color: #71717a;
+  font-style: italic;
+  pointer-events: none;
+}
+

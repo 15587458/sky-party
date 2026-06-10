@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- Events ---
+    match /events/{eventId} {
+      allow read: if true;
+      allow write: if true; // For the demo, we allow guest writes. In production, we'd use isAdmin().
+      
+      function isValidEvent(data) {
+        return data.title is string && data.title.size() <= 100 &&
+               data.date is string && data.date.size() <= 50 &&
+               data.isActive is bool &&
+               (!('price' in data) || (data.price is string && data.price.size() <= 50)) &&
+               (!('priceMax' in data) || (data.priceMax is string && data.priceMax.size() <= 50)) &&
+               (!('vipPrice' in data) || (data.vipPrice is string && data.vipPrice.size() <= 50)) &&
+               (!('description' in data) || (data.description is string && data.description.size() <= 5000)) &&
+               (!('location' in data) || (data.location is string && data.location.size() <= 500)) &&
+               (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000000)) &&
+               (!('ticketLink' in data) || (data.ticketLink is string && data.ticketLink.size() <= 2000)) &&
+               (!('chartId' in data) || (data.chartId is string)) &&
+               (!('hasSeatingChart' in data) || (data.hasSeatingChart is bool)) &&
+               (!('createdAt' in data) || (data.createdAt is timestamp || data.createdAt is number)) &&
+               (!('updatedAt' in data) || (data.updatedAt is timestamp || data.updatedAt is number)) &&
+               (!('endDate' in data) || (data.endDate is number || data.endDate is timestamp));
+      }
+
+      allow create: if isValidId(eventId) && isValidEvent(request.resource.data);
+      allow update: if isValidId(eventId) && isValidEvent(request.resource.data);
+      allow delete: if isValidId(eventId);
+    }
+
+    // --- Orders ---
+    match /orders/{orderId} {
+      allow get: if true;
+      allow list: if true; // In production, restrict to admin
+      
+      function isValidOrder(data) {
+        return data.eventId is string &&
+               data.name is string && data.name.size() <= 100 &&
+               data.surname is string && data.surname.size() <= 100 &&
+               data.email is string && data.email.size() <= 200 &&
+               data.phone is string && data.phone.size() <= 50 &&
+               data.status in ['pending', 'paid', 'cancelled'] &&
+               data.price is number &&
+               data.ticketType in ['standard', 'vip', 'free'] &&
+               (!('elementId' in data) || (data.elementId is string || data.elementId == null)) &&
+               (!('createdAt' in data) || data.createdAt is number) &&
+               data.scannedCount is number;
+      }
+
+      allow create: if isValidId(orderId) && isValidOrder(request.resource.data);
+      allow update: if isValidId(orderId) && (
+        // Admin update everything
+        true || 
+        // Public scanner update (scannedCount increment)
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['scannedCount']) && 
+         request.resource.data.scannedCount == resource.data.scannedCount + 1)
+      );
+    }
+
+    // --- Private Settings ---
+    match /settings/private {
+      allow read, write: if true; // Demo mode. In production, restrict to admin.
+    }
+
+    // --- Config ---
+    match /config/settings {
+      allow read: if true;
+      allow write: if true;
+
+      function isValidConfig(data) {
+        return (!('instagramUrl' in data) || (data.instagramUrl is string && data.instagramUrl.size() <= 1000)) &&
+               (!('bannerTitle' in data) || (data.bannerTitle is string && data.bannerTitle.size() <= 200)) &&
+               (!('footerText' in data) || (data.footerText is string && data.footerText.size() <= 200)) &&
+               (!('noEventsMessage' in data) || (data.noEventsMessage is string && data.noEventsMessage.size() <= 200));
+      }
+
+      allow create, update: if isValidConfig(request.resource.data);
+    }
+
+    // --- Charts ---
+    match /charts/{chartId} {
+      allow read: if true;
+      allow write: if true; // Demo mode, in production use isAdmin()
+      
+      function isValidChart(data) {
+        return data.name is string && data.name.size() <= 100 &&
+               (!('backgroundImage' in data) || (data.backgroundImage is string)) &&
+               (!('elementsCount' in data) || (data.elementsCount is number)) &&
+               (!('createdAt' in data) || (data.createdAt is timestamp || data.createdAt is number)) &&
+               (!('updatedAt' in data) || (data.updatedAt is timestamp || data.updatedAt is number));
+      }
+      
+      allow create, update: if isValidId(chartId) && isValidChart(request.resource.data);
+      allow delete: if isValidId(chartId);
+
+      // Subcollection for elements to avoid 1MB limit
+      match /elements/{elementId} {
+        allow read, write: if true;
+      }
+    }
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "entities": {
+    "Event": {
+      "title": "Party Event",
+      "description": "Details about a party event.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string" },
+        "location": { "type": "string" },
+        "price": { "type": "string" },
+        "priceMax": { "type": "string" },
+        "vipPrice": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "ticketLink": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "number" },
+        "seatingChart": { "type": "string" }
+      },
+      "required": ["title", "date", "isActive"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A ticket purchase order.",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string" },
+        "name": { "type": "string" },
+        "surname": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string" },
+        "price": { "type": "number" },
+        "ticketType": { "type": "string" },
+        "tableId": { "type": "string" },
+        "seatId": { "type": "string" },
+        "ticketId": { "type": "string" },
+        "scannedCount": { "type": "number" },
+        "createdAt": { "type": "number" }
+      }
+    },
+    "PrivateSettings": {
+      "title": "Private Settings",
+      "description": "Security-sensitive configuration.",
+      "type": "object",
+      "properties": {
+        "monobankToken": { "type": "string" },
+        "smtpUser": { "type": "string" },
+        "smtpPass": { "type": "string" },
+        "telegramBotToken": { "type": "string" },
+        "telegramChatId": { "type": "string" }
+      }
+    },
+    "SiteConfig": {
+      "title": "Site Configuration",
+      "description": "Global settings for the website.",
+      "type": "object",
+      "properties": {
+        "instagramUrl": { "type": "string" },
+        "telegramUrl": { "type": "string" },
+        "facebookUrl": { "type": "string" },
+        "bannerTitle": { "type": "string" },
+        "footerText": { "type": "string" },
+        "noEventsMessage": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "contactAddress": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "primaryColor": { "type": "string" },
+        "aboutText": { "type": "string" }
+      }
+    },
+    "Chart": {
+      "title": "Seating Chart",
+      "description": "A reusable seating chart template.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "backgroundImage": { "type": "string" },
+        "elementsCount": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["name"]
+    },
+    "ChartElement": {
+      "title": "Chart Element",
+      "description": "A single element (seat, table, etc.) in a chart.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "label": { "type": "string" },
+        "priceType": { "type": "string" },
+        "parentId": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/events/{eventId}": {
+      "schema": "Event",
+      "description": "Collection of party events."
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of ticket orders."
+    },
+    "/charts/{chartId}": {
+      "schema": "Chart",
+      "description": "Library of reusable seating charts."
+    },
+    "/charts/{chartId}/elements/{elementId}": {
+      "schema": "ChartElement",
+      "description": "Individual elements for a chart."
+    },
+    "/settings/private": {
+      "schema": "PrivateSettings",
+      "description": "Private application configuration."
+    },
+    "/config/settings": {
+      "schema": "SiteConfig",
+      "description": "Global site configuration document."
+    }
+  }
+}
