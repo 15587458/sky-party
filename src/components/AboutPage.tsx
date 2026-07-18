@@ -35,16 +35,47 @@ export default function AboutPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="space-y-4"
+          className="flex flex-col md:flex-row md:items-center gap-6 md:gap-8"
         >
-          <div className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-500/15 py-1.5 px-4 rounded-full">
-            <span className="w-1.5 h-1.5 rounded-full bg-neon-purple animate-pulse" />
-            <span className="text-[10px] font-black uppercase tracking-widest text-purple-400">ПРО НАС / ABOUT</span>
+          <div className="shrink-0 self-start md:self-auto select-none">
+            {config?.logoUrl ? (
+              <img 
+                src={config.logoUrl} 
+                alt="Sky Party Logo" 
+                className="h-24 w-24 md:h-28 md:w-28 object-contain drop-shadow-[0_0_20px_rgba(255,215,0,0.2)]"
+              />
+            ) : (
+              /* Beautiful Large Concentric Golden Logo Fallback */
+              <svg className="h-24 w-24 md:h-28 md:w-28 drop-shadow-[0_0_15px_rgba(225,186,66,0.15)]" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <linearGradient id="gold-grad-about" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#fff4cc" />
+                    <stop offset="30%" stopColor="#e1ba42" />
+                    <stop offset="70%" stopColor="#b88314" />
+                    <stop offset="100%" stopColor="#fff4cc" />
+                  </linearGradient>
+                </defs>
+                <circle cx="50" cy="50" r="45" stroke="url(#gold-grad-about)" strokeWidth="1.2" />
+                <circle cx="50" cy="50" r="41.5" stroke="url(#gold-grad-about)" strokeWidth="0.6" strokeDasharray="1 1" opacity="0.8" />
+                <g transform="translate(41, 18) scale(0.4)">
+                  <path d="M 6 14 A 5 5 0 0 1 15 9 A 7 7 0 0 1 31 11 A 5 5 0 0 1 34 19 A 3 3 0 0 1 31 22 L 9 22 A 3 3 0 0 1 6 14 Z" fill="none" stroke="url(#gold-grad-about)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M 33,5 L 34.5,8 L 37.5,8.3 L 35.2,10.6 L 36,13.8 L 33,12.2 L 30,13.8 L 30.8,10.6 L 28.5,8.3 L 31.5,8 Z" fill="url(#gold-grad-about)" />
+                </g>
+                <text x="50" y="52" fill="url(#gold-grad-about)" fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" fontWeight="900" fontSize="11" letterSpacing="0.18em" textAnchor="middle">SKY</text>
+                <text x="50" y="65" fill="url(#gold-grad-about)" fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" fontWeight="900" fontSize="11" letterSpacing="0.14em" textAnchor="middle">PARTY</text>
+              </svg>
+            )}
           </div>
-          <h1 className="text-4xl md:text-5xl font-black uppercase text-gradient tracking-tight leading-tight">
-            {config?.bannerTitle || 'SKY PARTY'}
-          </h1>
-          <div className="h-[2px] w-32 bg-linear-to-r from-purple-600 to-blue-500" />
+          <div className="space-y-4 flex-1">
+            <div className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-500/15 py-1.5 px-4 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-neon-purple animate-pulse" />
+              <span className="text-[10px] font-black uppercase tracking-widest text-purple-400">ПРО НАС / ABOUT</span>
+            </div>
+            <h1 className="text-4xl md:text-5xl font-black uppercase text-gradient tracking-tight leading-tight">
+              {config?.bannerTitle || 'SKY PARTY'}
+            </h1>
+            <div className="h-[2px] w-32 bg-linear-to-r from-purple-600 to-blue-500" />
+          </div>
         </motion.div>
 
         {/* Content Box */}

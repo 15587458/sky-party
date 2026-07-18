@@ -1,6 +1,6 @@
 {
   "name": "SKY PARTY",
-  "description": "Платформа для продажу квитків на SKY PARTY з повною адмін-панеллю та керуванням контентом.",
+  "description": "Платформа для продажу квитків на SKY PARTYІ.",
   "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

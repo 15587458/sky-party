@@ -14,8 +14,7 @@ export const sendTicketEmail = async (
   config?: SiteConfig | null
 ) => {
   if (!privateSettings?.smtpPass) {
-    console.error('SMTP Password not configured');
-    return;
+    console.warn('SMTP Password not configured client-side, proceeding to let backend use its own secure settings fallback.');
   }
 
   // 1. Generate PDF Attachments client-side before dispatching
@@ -23,7 +22,7 @@ export const sendTicketEmail = async (
   try {
     const { jsPDF } = await import('jspdf');
     const { toPng } = await import('html-to-image');
-    const { getBase64ImageSafe } = await import('./pdfService');
+    const { getBase64ImageSafe, generateQRCodeBase64 } = await import('./pdfService');
 
     // Resolve images safely
     let eventBase64 = '';
@@ -53,8 +52,7 @@ export const sendTicketEmail = async (
 
     // Loop through quantity to generate accurate PDFs
     for (let i = 0; i < quantity; i++) {
-      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${orderId}:${i + 1}`;
-      const qrBase64 = await getBase64ImageSafe(qrUrl);
+      const qrBase64 = await generateQRCodeBase64(`${orderId}:${i + 1}`);
 
       const tempDiv = document.createElement('div');
       tempDiv.id = `temp-email-pdf-${i}`;
@@ -236,8 +234,10 @@ export const sendTicketEmail = async (
       email,
       subject: `Ваш квиток на ${event.title}`,
       html,
-      smtpUser: privateSettings.smtpUser || 'sky.party@ukr.net',
-      smtpPass: privateSettings.smtpPass,
+      smtpUser: privateSettings?.smtpUser || '',
+      smtpPass: privateSettings?.smtpPass || '',
+      smtpHost: privateSettings?.smtpHost || '',
+      smtpPort: privateSettings?.smtpPort || '',
       pdfAttachments, // Pass our client-side generated designer PDFs!
       orderDetails: {
         name,
@@ -250,8 +250,8 @@ export const sendTicketEmail = async (
       }
     });
     return true;
-  } catch (err) {
+  } catch (err: any) {
     console.error('Failed to send email:', err);
-    return false;
+    throw new Error(err.response?.data?.error || err.message || 'Помилка при з’єднанні з сервером пошти');
   }
 };

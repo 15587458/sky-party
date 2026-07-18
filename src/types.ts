@@ -79,6 +79,8 @@ export interface PrivateSettings {
   monobankToken?: string;
   smtpUser?: string;
   smtpPass?: string;
+  smtpHost?: string;
+  smtpPort?: string;
   telegramBotToken?: string;
   telegramChatId?: string;
 }
@@ -95,6 +97,8 @@ export interface SiteConfig {
   contactEmail?: string;
   contactAddress?: string;
   primaryColor?: string; // Hex color code
+  bgGradientColor?: string; // Background glow/gradient Hex color code
+  bgGradientOpacity?: number; // Background glow/gradient opacity percentage (0-100)
   adminPassword?: string; 
   commissionPercentage?: number;
   ticketBgColor?: string;
@@ -103,4 +107,5 @@ export interface SiteConfig {
   ticketBorderColor?: string;
   ticketLogoUrl?: string;
   ticketMessage?: string;
+  siteUrl?: string;
 }

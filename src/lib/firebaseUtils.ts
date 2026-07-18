@@ -44,5 +44,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  // Note: We do not throw an Error here because throwing inside asynchronous callbacks
+  // (such as onSnapshot error handlers) generates uncaught exceptions that halt execution.
+  // This would prevent UI-initializing state setters from running, resulting in a blank black screen.
+  // By logging instead of throwing, we allow the application to recover or display graceful fallbacks.
 }

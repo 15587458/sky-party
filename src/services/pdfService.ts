@@ -1,6 +1,3 @@
-import { jsPDF } from 'jspdf';
-import { toPng } from 'html-to-image';
-
 /**
  * Safely fetches a remote image and converts it to a Base64 data URL.
  * Handles CORS and falls back to the original URL if fetch fails.
@@ -8,6 +5,8 @@ import { toPng } from 'html-to-image';
 export const getBase64ImageSafe = async (url: string): Promise<string> => {
   if (!url) return '';
   if (url.startsWith('data:')) return url;
+
+  const EMPTY_IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
   try {
     const response = await fetch(url, { mode: 'cors' });
@@ -18,13 +17,34 @@ export const getBase64ImageSafe = async (url: string): Promise<string> => {
       reader.onloadend = () => {
         resolve(reader.result as string);
       };
-      reader.onerror = () => resolve(url);
+      reader.onerror = () => resolve(EMPTY_IMAGE);
       reader.readAsDataURL(blob);
     });
   } catch (error) {
-    console.warn('CORS or fetch error converting image, falling back to original URL:', url, error);
-    // If CORS fails, try loading simple Image as fallback (or just return original URL)
-    return url;
+    console.warn('CORS or fetch error converting image, falling back to transparent spacer:', url, error);
+    return EMPTY_IMAGE;
+  }
+};
+
+/**
+ * Generates a QR Code as a base64 data URL locally (no network requests, no CORS issues).
+ */
+export const generateQRCodeBase64 = async (text: string): Promise<string> => {
+  try {
+    const QRCode = await import('qrcode');
+    const toDataURL = QRCode.toDataURL || (QRCode as any).default?.toDataURL;
+    if (!toDataURL) throw new Error('QRCode.toDataURL not found');
+    return await toDataURL(text, {
+      margin: 1,
+      width: 300,
+      color: {
+        dark: '#000000',
+        light: '#FFFFFF'
+      }
+    });
+  } catch (error) {
+    console.error('Failed to generate QR code locally:', error);
+    return `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(text)}`;
   }
 };
 
@@ -36,6 +56,9 @@ export const downloadTicketPDF = async (ticketElementId: string, orderId: string
   if (!element) return false;
 
   try {
+    const { jsPDF } = await import('jspdf');
+    const { toPng } = await import('html-to-image');
+
     // Wait for all images inside the element to fully complete loading
     const images = element.getElementsByTagName('img');
     const imageLoadPromises = Array.from(images).map((img) => {

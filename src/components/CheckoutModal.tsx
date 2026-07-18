@@ -102,7 +102,8 @@ export default function CheckoutModal({ event, ticketType, selectedSeat, initial
       await setDoc(doc(db, 'orders', orderId), orderData);
 
       if (orderData.status === 'paid') {
-        await sendTicketEmail(orderId, formData.email, formData.name, formData.surname, event, ticketType, privateSettings, selectedSeat, quantity, config);
+        sendTicketEmail(orderId, formData.email, formData.name, formData.surname, event, ticketType, privateSettings, selectedSeat, quantity, config)
+          .catch(err => console.error('Background sendTicketEmail error:', err));
       }
 
       if (ticketType === 'free' || totalPrice === 0) {
@@ -113,7 +114,16 @@ export default function CheckoutModal({ event, ticketType, selectedSeat, initial
 
       // Handle Monobank Payment
       if (privateSettings?.monobankToken) {
-        const payload = {
+        let baseDomain = window.location.origin;
+        if (config?.siteUrl && config.siteUrl.trim() !== '') {
+          let cleanUrl = config.siteUrl.trim();
+          if (!cleanUrl.toLowerCase().startsWith('http://') && !cleanUrl.toLowerCase().startsWith('https://')) {
+            cleanUrl = 'https://' + cleanUrl;
+          }
+          baseDomain = cleanUrl.replace(/\/+$/, '');
+        }
+
+        const payload: any = {
           amount: totalPrice * 100, // in kopecks
           ccy: 980, // UAH
           reference: orderId, // Top-level reference for tracking
@@ -121,16 +131,21 @@ export default function CheckoutModal({ event, ticketType, selectedSeat, initial
             destination: `${quantity} квитків на ${event.title}`,
             comment: `Order: ${orderId}`,
           },
-          redirectUrl: window.location.origin + '/?paid=' + orderId,
-          webHookUrl: window.location.origin + '/api/monobank/webhook',
+          redirectUrl: `${baseDomain}/?paid=${orderId}`,
           token: privateSettings.monobankToken
         };
+
+        // Monobank webhooks strictly require a public HTTPS URL. Skip for localhost or non-https.
+        if (baseDomain.startsWith('https://') && !baseDomain.includes('localhost') && !baseDomain.includes('127.0.0.1')) {
+          payload.webHookUrl = `${baseDomain}/api/monobank/webhook`;
+        }
 
         const response = await axios.post('/api/monobank/invoice', payload);
         if (response.data.pageUrl) {
           if (response.data.invoiceId) {
             await setDoc(doc(db, 'orders', orderId), {
               ...orderData,
+              status: 'pending', // Order starts as pending until payment is verified by webhook/callback status check
               monobankInvoiceId: response.data.invoiceId
             });
           }
@@ -143,7 +158,25 @@ export default function CheckoutModal({ event, ticketType, selectedSeat, initial
       }
     } catch (err: any) {
       console.error(err);
-      setError(err.response?.data?.error || err.message);
+      let errorMessage = '';
+      if (err.response?.data?.error) {
+        const errData = err.response.data.error;
+        if (typeof errData === 'object') {
+          errorMessage = errData.errText || errData.message || JSON.stringify(errData);
+        } else {
+          errorMessage = errData;
+        }
+      } else if (err.response?.data) {
+        const responseData = err.response.data;
+        if (typeof responseData === 'object') {
+          errorMessage = responseData.error || responseData.errText || responseData.message || JSON.stringify(responseData);
+        } else {
+          errorMessage = responseData;
+        }
+      } else {
+        errorMessage = err.message || 'Помилка мережі чи сервера';
+      }
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }

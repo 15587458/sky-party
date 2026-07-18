@@ -27,6 +27,15 @@ export default function QRScanner() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const scannerRef = useRef<Html5Qrcode | null>(null);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const eventIdParam = params.get('eventId') || params.get('event');
+    if (eventIdParam) {
+      setSelectedEventId(eventIdParam);
+      setTypedEventId(eventIdParam);
+    }
+  }, []);
+
   const stopScanner = async () => {
     if (scannerRef.current && scannerRef.current.isScanning) {
       try {

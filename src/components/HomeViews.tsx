@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import React, { useState, Suspense, lazy } from 'react';
 import { motion } from 'motion/react';
 import { Instagram, ArrowRight, Calendar, MapPin, Ticket } from 'lucide-react';
 import { Event, SiteConfig, ChartElement } from '../types';
 import CheckoutModal from './CheckoutModal';
-import SeatingChartSelector from './SeatingChartSelector';
+const SeatingChartSelector = lazy(() => import('./SeatingChartSelector'));
 import { useApp } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
 
@@ -30,11 +30,27 @@ const formatDate = (dateStr: string) => {
   return dateStr;
 };
 
+const hexToRgba = (hex: string, alpha: number) => {
+  const cleaned = hex.replace('#', '');
+  if (cleaned.length === 3) {
+    const r = parseInt(cleaned[0] + cleaned[0], 16);
+    const g = parseInt(cleaned[1] + cleaned[1], 16);
+    const b = parseInt(cleaned[2] + cleaned[2], 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  } else if (cleaned.length === 6) {
+    const r = parseInt(cleaned.slice(0, 2), 16);
+    const g = parseInt(cleaned.slice(2, 4), 16);
+    const b = parseInt(cleaned.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  return hex;
+};
+
 export function EventDisplay({ event }: EventDisplayProps) {
   const [checkoutType, setCheckoutType] = useState<'standard' | 'vip' | 'free' | null>(null);
   const [selectedSeat, setSelectedSeat] = useState<ChartElement | null>(null);
   const [initialQuantity, setInitialQuantity] = useState(1);
-  const { privateSettings, setShowAbout } = useApp();
+  const { privateSettings, setShowAbout, config } = useApp();
 
   const handleSeatSelect = (element: ChartElement, quantity: number = 1) => {
     setSelectedSeat(element);
@@ -44,13 +60,18 @@ export function EventDisplay({ event }: EventDisplayProps) {
     }
   };
 
+  const bgGradient = config?.bgGradientColor || '#1a0033';
+  const bgGradientOpacity = config?.bgGradientOpacity ?? 100;
+  const bgGradientRgba = hexToRgba(bgGradient, bgGradientOpacity / 100);
+
   return (
     <div className="flex flex-col lg:flex-row min-h-[calc(100vh-4rem)] bg-bg-dark overflow-hidden">
       {/* Left Panel: Event Visual & Seating */}
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        className="w-full lg:w-[58%] relative flex flex-col items-center justify-center p-8 lg:p-20 bg-linear-to-br from-[#1a0033] to-black border-r border-white/5 overflow-y-auto"
+        style={{ backgroundImage: `linear-gradient(135deg, ${bgGradientRgba} 0%, #000000 100%)` }}
+        className="w-full lg:w-[58%] relative flex flex-col items-center justify-center p-8 lg:p-20 border-r border-white/5 overflow-y-auto"
       >
         <motion.div 
           initial={{ scale: 0.95, opacity: 0 }}
@@ -157,12 +178,21 @@ export function EventDisplay({ event }: EventDisplayProps) {
       </div>
 
       {checkoutType && event.chartId && event.hasSeatingChart !== false && !selectedSeat && (
-        <SeatingChartSelector 
-          event={event}
-          ticketType={checkoutType as 'standard' | 'vip'}
-          onSelect={handleSeatSelect}
-          onClose={() => setCheckoutType(null)}
-        />
+        <Suspense fallback={
+          <div className="fixed inset-0 z-[150] bg-black/95 flex items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+               <div className="w-12 h-12 border-4 border-neon-purple border-t-transparent rounded-full animate-spin" />
+               <p className="text-xs font-black uppercase tracking-widest text-zinc-500">Завантаження схеми...</p>
+            </div>
+          </div>
+        }>
+          <SeatingChartSelector 
+            event={event}
+            ticketType={checkoutType as 'standard' | 'vip'}
+            onSelect={handleSeatSelect}
+            onClose={() => setCheckoutType(null)}
+          />
+        </Suspense>
       )}
 
       {checkoutType && (event.hasSeatingChart === false || !event.chartId || selectedSeat) && (
@@ -184,18 +214,40 @@ export function EventDisplay({ event }: EventDisplayProps) {
 }
 
 export function NoEventsDisplay({ config }: { config: SiteConfig }) {
+  const bgGradient = config?.bgGradientColor || '#1a0033';
+  const bgGradientOpacity = config?.bgGradientOpacity ?? 100;
+  // Default overlay is 20% opacity (0.2), scaled by our setting
+  const overlayOpacity = (bgGradientOpacity / 100) * 0.2;
+  const bgGradientRgba = hexToRgba(bgGradient, overlayOpacity);
+
   return (
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-4rem)] px-4 text-center bg-bg-dark relative overflow-hidden">
-      <div className="absolute inset-0 bg-linear-to-br from-[#1a0033]/20 to-black pointer-events-none" />
+      <div 
+        style={{ backgroundImage: `linear-gradient(135deg, ${bgGradientRgba} 0%, #000000 100%)` }}
+        className="absolute inset-0 pointer-events-none" 
+      />
       
       <motion.div
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
         className="max-w-2xl space-y-12 relative z-10"
       >
-        <div className="p-8 rounded-full bg-white/5 border border-white/10 inline-block glow-purple">
-          <Ticket size={80} className="text-neon-purple/50" />
-        </div>
+        {config.logoUrl ? (
+          <div className="flex justify-center select-none">
+            <motion.img
+              initial={{ rotate: -5, scale: 0.95 }}
+              animate={{ rotate: 0, scale: 1 }}
+              transition={{ type: "spring", stiffness: 100 }}
+              src={config.logoUrl}
+              alt="Sky Party Logo"
+              className="w-48 h-48 md:w-56 md:h-56 object-contain drop-shadow-[0_0_35px_rgba(255,215,0,0.15)] filter"
+            />
+          </div>
+        ) : (
+          <div className="p-8 rounded-full bg-white/5 border border-white/10 inline-block glow-purple">
+            <Ticket size={80} className="text-neon-purple/50" />
+          </div>
+        )}
         
         <div className="space-y-6">
           <h2 className="text-5xl lg:text-6xl font-black tracking-tighter text-gradient uppercase">

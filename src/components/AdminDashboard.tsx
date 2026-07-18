@@ -37,7 +37,9 @@ import {
   BarChart3,
   TrendingUp,
   DollarSign,
-  FileText
+  FileText,
+  Smartphone,
+  QrCode
 } from 'lucide-react';
 import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, serverTimestamp, query, orderBy, deleteField } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firebaseUtils';
@@ -82,7 +84,7 @@ const MonobankPawIcon = () => (
 
 export default function AdminDashboard() {
   const { rawEvents, events, charts, config, setAdmin, isInitialized, orders, privateSettings, loadChartElements } = useApp();
-  const [activeTab, setActiveTab] = useState<'events' | 'config' | 'orders' | 'charts' | 'scanner' | 'stats'>('events');
+  const [activeTab, setActiveTab] = useState<'events' | 'config' | 'orders' | 'charts' | 'scanner' | 'stats' | 'scanner-integration'>('events');
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [editingEvent, setEditingEvent] = useState<Partial<Event> | null>(null);
   const [editingChart, setEditingChart] = useState<Partial<Chart> | null>(null);
@@ -97,6 +99,9 @@ export default function AdminDashboard() {
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [isDbOnline, setIsDbOnline] = useState<boolean | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string>('all');
+  const [integrationEventId, setIntegrationEventId] = useState<string>('');
+  const [copiedIntegrationLink, setCopiedIntegrationLink] = useState(false);
+  const [scannerSearchQuery, setScannerSearchQuery] = useState('');
   const [issuingFreeTicketData, setIssuingFreeTicketData] = useState<{
     isOpen: boolean;
     element?: ChartElement;
@@ -147,15 +152,14 @@ export default function AdminDashboard() {
       const event = rawEvents.find(e => e.id === viewingOrder.eventId);
       if (!event) return;
 
-      const { getBase64ImageSafe, downloadTicketPDF } = await import('../services/pdfService');
+      const { getBase64ImageSafe, generateQRCodeBase64, downloadTicketPDF } = await import('../services/pdfService');
 
       let eventBase64Img = '';
       if (event.imageUrl) {
         eventBase64Img = await getBase64ImageSafe(event.imageUrl);
       }
 
-      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${viewingOrder.id}:${index + 1}`;
-      const qrBase64 = await getBase64ImageSafe(qrUrl);
+      const qrBase64 = await generateQRCodeBase64(`${viewingOrder.id}:${index + 1}`);
 
       const tBg = config?.ticketBgColor || '#0a0a0c';
       const tText = config?.ticketTextColor || '#ffffff';
@@ -267,6 +271,13 @@ export default function AdminDashboard() {
       document.body.style.overflow = 'unset';
     };
   }, [editingEvent, viewingOrder, editingChart, isEditingConfig, isEditingPrivate, showAdminMapSelector, issuingFreeTicketData?.isOpen]);
+
+  React.useEffect(() => {
+    if (!integrationEventId && rawEvents.length > 0) {
+      const active = rawEvents.find(e => e.isActive);
+      setIntegrationEventId(active ? active.id : rawEvents[0].id);
+    }
+  }, [rawEvents, integrationEventId]);
 
   const handleSelectAdminEvent = async (eventId: string) => {
     setAdminSelectedEventId(eventId);
@@ -391,10 +402,17 @@ export default function AdminDashboard() {
       }
       
       const DEFAULT_CONFIG = {
+        logoUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500' width='500' height='500'%3E%3Cdefs%3E%3ClinearGradient id='gold' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFE082' /%3E%3Cstop offset='30%25' stop-color='%23FFB300' /%3E%3Cstop offset='50%25' stop-color='%23FFF8E1' /%3E%3Cstop offset='70%25' stop-color='%23FFC107' /%3E%3Cstop offset='100%25' stop-color='%23B78A02' /%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='250' cy='250' r='195' fill='none' stroke='url(%23gold)' stroke-width='4.5' /%3E%3Ccircle cx='250' cy='250' r='181' fill='none' stroke='url(%23gold)' stroke-width='1.5' /%3E%3Cg transform='translate(0, -5)'%3E%3Cpath d='M 226 185 a 14 14 0 0 1 18 -11 a 20 20 0 0 1 27 -4 a 18 18 0 0 1 11 19 a 13 13 0 0 1 -3 9 l -50 0 a 14 14 0 0 1 -3 -13 Z' fill='white' opacity='0.95' /%3E%3Cpath d='M 283 162 L 284.5 166 L 288.5 166 L 285.3 168.5 L 286.5 172.5 L 283 170 L 279.5 172.5 L 280.7 168.5 L 277.5 166 L 281.5 166 Z' fill='url(%23gold)' /%3E%3C/g%3E%3Ctext x='250' y='278' font-family='sans-serif' font-size='68' font-weight='900' fill='url(%23gold)' text-anchor='middle' letter-spacing='12'%3ESKY%3C/text%3E%3Ctext x='250' y='348' font-family='sans-serif' font-size='62' font-weight='900' fill='url(%23gold)' text-anchor='middle' letter-spacing='10'%3EPARTY%3C/text%3E%3C/svg%3E",
         instagramUrl: 'https://instagram.com/sky_party_kyiv',
+        telegramUrl: 'https://t.me/sky_party_kyiv',
+        facebookUrl: 'https://facebook.com/skypartykyiv',
         bannerTitle: 'SKY PARTY',
-        footerText: '© 2026 SKY PARTY',
-        noEventsMessage: 'Зараз немає актуальних подій'
+        footerText: 'SKY PARTY — ТВОЄ НЕБО, ТВОЯ ВЕЧІРКА.',
+        noEventsMessage: 'Зараз немає актуальних подій',
+        aboutText: `Sky Party — це не просто серія вечірок, а новий рівень нічного життя та твій унікальний вимір нічних івентів. Ми об'єднуємо кращих артистів, сучасне світлое шоу та неповторну атмосферу, щоб створити незабутні спогади, що залишаються назавжди.\n\nНаша місія — дарувати емоції через преміальний звук та візуальне мистецтво. Кожна подія продумана до найдрібніших деталей, від вибору унікальної локації до коктейльної карти.`,
+        contactEmail: 'info@skyparty.ua',
+        contactAddress: 'м. Київ, вул. Паркова, 12',
+        primaryColor: '#a855f7'
       };
       
       await setDoc(doc(db, 'config', 'settings'), DEFAULT_CONFIG);
@@ -557,6 +575,58 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleManualCheckIn = async (order: Order) => {
+    if (!db) {
+      showMessage('error', 'Firebase не налаштовано');
+      return;
+    }
+    const nextIndex = (order.scannedCount || 0) + 1;
+    if (nextIndex > (order.quantity || 1)) {
+      showMessage('error', 'Всі квитки за цим замовленням вже використано!');
+      return;
+    }
+    
+    const scannedList = order.scannedTickets || [];
+    const newScannedList = [...scannedList, String(nextIndex)];
+    const isCompletelyUsed = newScannedList.length >= (order.quantity || 1);
+    const nowISO = new Date().toISOString();
+    const currentTimes = order.scannedAtTimes || {};
+    const newTimes = { ...currentTimes, [nextIndex]: nowISO };
+
+    try {
+      await updateDoc(doc(db, 'orders', order.id), {
+        scannedCount: nextIndex,
+        scannedTickets: newScannedList,
+        scannedAtTimes: newTimes,
+        status: isCompletelyUsed ? 'used' : order.status,
+        scannedAt: nowISO
+      });
+      showMessage('success', `Гість замовлення №${order.id} пройшов контроль!`);
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${order.id}`);
+    }
+  };
+
+  const handleManualReset = async (order: Order) => {
+    if (!db) {
+      showMessage('error', 'Firebase не налаштовано');
+      return;
+    }
+    if (!confirm(`Скинути статус входу для ${order.name}?`)) return;
+    try {
+      await updateDoc(doc(db, 'orders', order.id), {
+        scannedCount: 0,
+        scannedTickets: [],
+        scannedAtTimes: {},
+        status: 'paid',
+        scannedAt: deleteField()
+      });
+      showMessage('success', `Статус для ${order.name} повністю відновлено.`);
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${order.id}`);
+    }
+  };
+
   const handleSaveEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingEvent) return;
@@ -700,7 +770,7 @@ export default function AdminDashboard() {
         if (order) {
           const event = rawEvents.find(e => e.id === order.eventId);
           if (event) {
-            await sendTicketEmail(
+            sendTicketEmail(
               order.id, 
               order.email, 
               order.name, 
@@ -711,14 +781,11 @@ export default function AdminDashboard() {
               undefined, // We don't easily have selectedSeat here but the template will work
               order.quantity || 1,
               config
-            );
+            ).catch(err => console.error('Background sendTicketEmail error:', err));
 
-            try {
-              const { notifyOrderPaid } = await import('../services/telegramService');
-              await notifyOrderPaid(order, event, privateSettings);
-            } catch (tgErr) {
-              console.error('Telegram notification error:', tgErr);
-            }
+            import('../services/telegramService')
+              .then(({ notifyOrderPaid }) => notifyOrderPaid(order, event, privateSettings))
+              .catch(tgErr => console.error('Telegram notification error:', tgErr));
           }
         }
       }
@@ -834,25 +901,22 @@ export default function AdminDashboard() {
         await setDoc(doc(db, 'orders', orderId), orderData);
 
         if (event) {
-          await sendTicketEmail(
+          sendTicketEmail(
             orderId, 
             email, 
             name || 'Клієнт', 
             surname || '', 
             event, 
             'free', 
-            privateSettings || undefined, 
+            privateSettings || null, 
             element, 
             finalQuantity,
             config
-          );
+          ).catch(err => console.error('Background sendTicketEmail error:', err));
 
-          try {
-            const { notifyOrderPaid } = await import('../services/telegramService');
-            await notifyOrderPaid(orderData, event, privateSettings, element.label);
-          } catch (tgErr) {
-            console.error('Telegram notification error:', tgErr);
-          }
+          import('../services/telegramService')
+            .then(({ notifyOrderPaid }) => notifyOrderPaid(orderData, event, privateSettings, element.label))
+            .catch(tgErr => console.error('Telegram notification error:', tgErr));
         }
 
         showMessage('success', `Квиток успішно видано та надіслано на ${email}`);
@@ -878,14 +942,12 @@ export default function AdminDashboard() {
           await setDoc(doc(db, 'orders', orderId), orderData);
 
           if (event) {
-            await sendTicketEmail(orderId, email, name || 'Клієнт', surname || '', event, ticketType, privateSettings, undefined, 1, config);
+            sendTicketEmail(orderId, email, name || 'Клієнт', surname || '', event, ticketType, privateSettings, undefined, 1, config)
+              .catch(err => console.error('Background sendTicketEmail error:', err));
             
-            try {
-              const { notifyOrderPaid } = await import('../services/telegramService');
-              await notifyOrderPaid(orderData, event, privateSettings);
-            } catch (tgErr) {
-              console.error('Telegram notification error:', tgErr);
-            }
+            import('../services/telegramService')
+              .then(({ notifyOrderPaid }) => notifyOrderPaid(orderData, event, privateSettings))
+              .catch(tgErr => console.error('Telegram notification error:', tgErr));
           }
         }
         showMessage('success', `${quantity} квитків видано та надіслано окремо`);
@@ -1048,9 +1110,10 @@ export default function AdminDashboard() {
                 { id: 'stats', label: 'Статистика', icon: BarChart3, group: 'analytics' },
                 { id: 'events', label: 'Події', icon: Calendar, group: 'operations' },
                 { id: 'orders', label: 'Замовлення', icon: Ticket, group: 'operations' },
+                { id: 'scanner-integration', label: 'Інтеграція сканера', icon: Smartphone, group: 'system' },
                 { id: 'charts', label: 'Зали', icon: Grid3X3, group: 'settings' },
                 { id: 'config', label: 'Сайт', icon: SettingsIcon, group: 'settings' },
-                { id: 'scanner', label: 'Сканер', icon: Maximize, group: 'system', isBadge: true },
+                { id: 'scanner', label: 'Веб-Сканер', icon: Maximize, group: 'system', isBadge: true },
               ].map((tab) => {
                 const TabIcon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -1365,6 +1428,19 @@ export default function AdminDashboard() {
                                 <p className="text-zinc-300 font-mono text-xs">{config?.primaryColor || '#a855f7'}</p>
                               </div>
                             </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Колір фонового світіння</label>
+                              <div className="flex items-center gap-3 bg-zinc-950/20 py-2 px-3 rounded-xl border border-white/[0.02] w-fit">
+                                <div className="w-5 h-5 rounded-full border border-white/10" style={{ backgroundColor: config?.bgGradientColor || '#1a0033' }} />
+                                <p className="text-zinc-300 font-mono text-xs">{config?.bgGradientColor || '#1a0033'}</p>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Інтенсивність світіння</label>
+                              <div className="flex items-center gap-3 bg-zinc-950/20 py-2 px-3 rounded-xl border border-white/[0.02] w-fit">
+                                <p className="text-zinc-300 font-mono text-xs">{config?.bgGradientOpacity ?? 100}%</p>
+                              </div>
+                            </div>
                             <div className="space-y-1 md:col-span-2">
                               <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Повідомлення про відсутність подій</label>
                               <p className="text-zinc-300 text-sm bg-zinc-950/20 py-2.5 px-3 rounded-xl border border-white/[0.02]">{config?.noEventsMessage}</p>
@@ -1494,13 +1570,21 @@ export default function AdminDashboard() {
                               </label>
                               <p className="text-zinc-350 font-mono text-xs bg-zinc-950/20 py-2.5 px-3 rounded-xl border border-white/[0.02]">{privateSettings?.monobankToken ? '••••••••' + privateSettings.monobankToken.slice(-4) : 'Не налаштовано'}</p>
                             </div>
-                            <div className="space-y-1">
+                             <div className="space-y-1">
                               <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">SMTP Email</label>
                               <p className="text-zinc-350 font-mono text-xs bg-zinc-950/20 py-2.5 px-3 rounded-xl border border-white/[0.02]">{privateSettings?.smtpUser || 'sky.party@ukr.net'}</p>
                             </div>
                             <div className="space-y-1">
-                              <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">SMTP Password (ukr.net)</label>
+                              <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">SMTP Password (app password)</label>
                               <p className="text-zinc-350 font-mono text-xs bg-zinc-950/20 py-2.5 px-3 rounded-xl border border-white/[0.02]">{privateSettings?.smtpPass ? '••••••••' : 'Не налаштовано'}</p>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">SMTP Host (сервер)</label>
+                              <p className="text-zinc-350 font-mono text-xs bg-zinc-950/20 py-2.5 px-3 rounded-xl border border-white/[0.02]">{privateSettings?.smtpHost || 'Авто (smtp.ukr.net)'}</p>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">SMTP Port (порт)</label>
+                              <p className="text-zinc-350 font-mono text-xs bg-zinc-950/20 py-2.5 px-3 rounded-xl border border-white/[0.02]">{privateSettings?.smtpPort || 'Авто (465)'}</p>
                             </div>
                             <div className="space-y-1">
                               <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Telegram Bot Token</label>
@@ -1754,6 +1838,355 @@ export default function AdminDashboard() {
               </div>
             </div>
           )}
+
+          {activeTab === 'scanner-integration' && (() => {
+            const currentEvent = rawEvents.find(e => e.id === integrationEventId);
+            const eventOrders = orders.filter(o => o.eventId === integrationEventId && (o.status === 'paid' || o.status === 'used'));
+            
+            const totalTicketsSold = eventOrders.reduce((sum, o) => sum + (o.quantity || 1), 0);
+            const totalTicketsScanned = eventOrders.reduce((sum, o) => sum + (o.scannedCount || 0), 0);
+            const attendanceRate = totalTicketsSold > 0 ? Math.round((totalTicketsScanned / totalTicketsSold) * 100) : 0;
+
+            const vipTicketsSold = eventOrders.filter(o => o.ticketType === 'vip').reduce((sum, o) => sum + (o.quantity || 1), 0);
+            const vipTicketsScanned = eventOrders.filter(o => o.ticketType === 'vip').reduce((sum, o) => sum + (o.scannedCount || 0), 0);
+
+            const standardTicketsSold = eventOrders.filter(o => o.ticketType === 'standard' || o.ticketType === 'free').reduce((sum, o) => sum + (o.quantity || 1), 0);
+            const standardTicketsScanned = eventOrders.filter(o => o.ticketType === 'standard' || o.ticketType === 'free').reduce((sum, o) => sum + (o.scannedCount || 0), 0);
+
+            // Extract individual scan logs
+            const scanLogs: any[] = [];
+            eventOrders.forEach(order => {
+              if (order.scannedAtTimes && typeof order.scannedAtTimes === 'object') {
+                Object.entries(order.scannedAtTimes).forEach(([subTicketId, timeStr]) => {
+                  scanLogs.push({
+                    id: `${order.id}-${subTicketId}`,
+                    orderId: order.id,
+                    subTicketId,
+                    name: `${order.name} ${order.surname}`,
+                    email: order.email,
+                    ticketType: order.ticketType,
+                    scannedAt: timeStr as string,
+                  });
+                });
+              } else if (order.scannedAt) {
+                scanLogs.push({
+                  id: `${order.id}-1`,
+                  orderId: order.id,
+                  subTicketId: '1',
+                  name: `${order.name} ${order.surname}`,
+                  email: order.email,
+                  ticketType: order.ticketType,
+                  scannedAt: order.scannedAt,
+                });
+              }
+            });
+
+            // Sort logs by scannedAt descending
+            scanLogs.sort((a, b) => new Date(b.scannedAt).getTime() - new Date(a.scannedAt).getTime());
+
+            const integrationLink = `${window.location.origin}/scan?eventId=${integrationEventId}`;
+            const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(integrationLink)}`;
+
+            const filteredOrders = eventOrders.filter(o => {
+              const q = scannerSearchQuery.toLowerCase().trim();
+              if (!q) return true;
+              return o.name.toLowerCase().includes(q) ||
+                     o.surname.toLowerCase().includes(q) ||
+                     o.email.toLowerCase().includes(q) ||
+                     o.id.toLowerCase().includes(q);
+            });
+
+            return (
+              <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                {/* Header */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-black uppercase tracking-tight text-white flex items-center gap-2">
+                      <Smartphone className="text-purple-400" size={24} />
+                      Мобільна інструментація & Інтеграція Сканера
+                    </h2>
+                    <p className="text-zinc-500 text-sm">Синхронізація квитків, гостей та сканування в реальному часі через будь-який смартфон.</p>
+                  </div>
+                  <div>
+                    <select
+                      value={integrationEventId}
+                      onChange={(e) => setIntegrationEventId(e.target.value)}
+                      className="h-11 bg-zinc-900 border border-zinc-800 rounded-xl px-4 text-xs font-bold uppercase tracking-wider focus:ring-2 focus:ring-purple-500 outline-none text-zinc-100 min-w-[220px] cursor-pointer"
+                    >
+                      {rawEvents.map(event => (
+                        <option key={event.id} value={event.id}>{event.title}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Dashboard grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                  {/* Left block - QR Code and setup instructions */}
+                  <div className="lg:col-span-4 bg-[#050505] border border-zinc-900 rounded-[32px] p-6 space-y-6 flex flex-col justify-between">
+                    <div className="space-y-4">
+                      <div className="inline-flex items-center gap-1.5 bg-purple-500/10 border border-purple-500/20 px-3 py-1 rounded-full">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                        <span className="text-[9px] font-black tracking-widest uppercase text-purple-400">Швидка зв'язка</span>
+                      </div>
+                      <h3 className="text-lg font-black uppercase text-white tracking-wider">Привʼяжіть Смартфон</h3>
+                      <p className="text-zinc-500 text-xs leading-relaxed">
+                        Відскануйте QR-код нижче будь-яким телефоном, щоб миттєво запустити камеру валідатора, синхронізовану з вибраною подією в реальному часі.
+                      </p>
+                    </div>
+
+                    <div className="bg-white/5 border border-white/5 p-4 rounded-[24px] mx-auto flex items-center justify-center relative overflow-hidden group">
+                      <div className="absolute inset-0 bg-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity blur-xl duration-350" />
+                      <div className="bg-white p-3 rounded-2xl relative z-10 shadow-lg">
+                        <img 
+                          src={qrImageUrl} 
+                          alt="Integration QR"
+                          className="w-48 h-48 block"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 flex items-center justify-between gap-3 overflow-hidden">
+                        <span className="text-[10px] font-mono text-zinc-400 truncate select-all">{integrationLink}</span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(integrationLink);
+                            setCopiedIntegrationLink(true);
+                            setTimeout(() => setCopiedIntegrationLink(false), 2000);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-[10px] font-black uppercase tracking-wider text-purple-400 shrink-0 transition-colors cursor-pointer"
+                        >
+                          {copiedIntegrationLink ? 'СКОПІЙОВАНО' : 'КОПІЮВАТИ'}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-zinc-600 text-center uppercase tracking-wider font-semibold">
+                        * Не потребує встановлення додаткових програм з App Store / Play Market
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Right block - Real-time stats and metrics */}
+                  <div className="lg:col-span-8 space-y-8">
+                    {/* Live stats cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="bg-[#050505] border border-zinc-900 rounded-[28px] p-6 space-y-3 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 p-4 text-purple-500/10">
+                          <Ticket size={40} className="text-purple-500/20" />
+                        </div>
+                        <p className="text-[10px] font-black uppercase text-zinc-500 tracking-widest">Продано квитків</p>
+                        <h4 className="text-3xl font-black text-white">{totalTicketsSold}</h4>
+                        <div className="flex gap-4 text-[10px] font-mono text-zinc-500 pt-1">
+                          <span>VIP: {vipTicketsSold}</span>
+                          <span>СТАНДАРТ: {standardTicketsSold}</span>
+                        </div>
+                      </div>
+
+                      <div className="bg-[#050505] border border-zinc-900 rounded-[28px] p-6 space-y-3 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 p-4 text-green-500/10">
+                          <CheckCircle2 size={40} className="text-green-500/20" />
+                        </div>
+                        <p className="text-[10px] font-black uppercase text-zinc-500 tracking-widest">Пройшли валідацію</p>
+                        <h4 className="text-3xl font-black text-green-400">{totalTicketsScanned}</h4>
+                        <div className="flex gap-4 text-[10px] font-mono text-zinc-500 pt-1">
+                          <span>VIP: {vipTicketsScanned} / {vipTicketsSold}</span>
+                          <span>СТАНДАРТ: {standardTicketsScanned} / {standardTicketsSold}</span>
+                        </div>
+                      </div>
+
+                      <div className="bg-[#050505] border border-zinc-900 rounded-[28px] p-6 space-y-4">
+                        <div>
+                          <p className="text-[10px] font-black uppercase text-zinc-500 tracking-widest">Відсоток входу</p>
+                          <h4 className="text-3xl font-black text-purple-400 mt-1">{attendanceRate}%</h4>
+                        </div>
+                        <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-500" 
+                            style={{ width: `${Math.min(attendanceRate, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Live Scanning Logs Feed */}
+                    <div className="bg-[#050505] border border-zinc-900 rounded-[32px] p-6 space-y-4">
+                      <div className="flex items-center justify-between border-b border-zinc-900 pb-4">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-ping shrink-0" />
+                          <h3 className="text-sm font-black uppercase tracking-wider text-white">Реальний час: Лог сканувань</h3>
+                        </div>
+                        <span className="text-[9px] bg-zinc-900 text-zinc-400 border border-zinc-800 px-2.5 py-1 rounded-md font-black uppercase tracking-wider">
+                          {scanLogs.length} Скан-подій
+                        </span>
+                      </div>
+
+                      {scanLogs.length === 0 ? (
+                        <div className="py-12 text-center text-zinc-650 text-xs font-semibold uppercase tracking-widest leading-relaxed">
+                          Очікування першого сканування з телефону...<br/>
+                          <span className="text-[10px] text-zinc-600 font-bold mt-1 block">Підключіть свій телефон через QR-код ліворуч</span>
+                        </div>
+                      ) : (
+                        <div className="max-h-[220px] overflow-y-auto pr-2 space-y-3 scrollbar-zinc">
+                          {scanLogs.slice(0, 5).map((log, index) => (
+                            <div 
+                              key={log.id} 
+                              className="bg-zinc-900/40 border border-white/[0.02] p-3 rounded-2xl flex items-center justify-between gap-4 hover:border-purple-500/20 transition-all animate-in slide-in-from-top-2 duration-300"
+                              style={{ animationDelay: `${index * 50}ms` }}
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center justify-center shrink-0">
+                                  <Smartphone size={14} className="text-purple-400" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-white truncate">{log.name}</p>
+                                  <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">
+                                    {log.orderId} (Квиток #{log.subTicketId})
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className={cn(
+                                  "px-2.5 py-0.5 rounded-[4px] text-[8px] font-black uppercase tracking-widest border",
+                                  log.ticketType === 'vip' 
+                                    ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-500" 
+                                    : "bg-purple-500/10 border-purple-500/20 text-purple-400"
+                                )}>
+                                  {log.ticketType}
+                                </span>
+                                <span className="text-[10px] font-mono text-zinc-500">
+                                  {new Date(log.scannedAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Live Client Base & Manual Control Center */}
+                <div className="bg-[#050505] border border-zinc-900 rounded-[32px] p-6 space-y-6">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-900 pb-6">
+                    <div>
+                      <h3 className="text-lg font-black uppercase text-white tracking-wider">База Квіткаристів & Гостей</h3>
+                      <p className="text-zinc-500 text-xs leading-relaxed">Пошук та статус прибуття гостей в реальному часі.</p>
+                    </div>
+                    <div className="relative w-full md:w-80">
+                      <span className="absolute left-3.5 top-3.5 text-zinc-500">
+                        <Search size={16} />
+                      </span>
+                      <input
+                        type="text"
+                        placeholder="Шукати за ім'ям, email або ID замовлення..."
+                        value={scannerSearchQuery}
+                        onChange={(e) => setScannerSearchQuery(e.target.value)}
+                        className="w-full h-11 bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 text-xs font-semibold text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500/50 transition-all font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {filteredOrders.length === 0 ? (
+                    <div className="py-12 text-center text-zinc-650 text-xs font-semibold uppercase tracking-widest">
+                      Нікого не знайдено за вашим запитом
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-zinc-900 text-zinc-500 font-bold uppercase tracking-widest text-[9px] pb-4">
+                            <th className="py-3 px-4">Гість</th>
+                            <th className="py-3 px-4">Код замовлення</th>
+                            <th className="py-3 px-4">Тип</th>
+                            <th className="py-3 px-4 text-center">Прохід</th>
+                            <th className="py-3 px-4">Останнє сканування</th>
+                            <th className="py-3 px-4 text-right">Дії на вході</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-900/60 font-medium">
+                          {filteredOrders.map((order) => {
+                            const isArrived = (order.scannedCount || 0) >= (order.quantity || 1);
+                            const isPartial = (order.scannedCount || 0) > 0 && (order.scannedCount || 0) < (order.quantity || 1);
+                            
+                            return (
+                              <tr key={order.id} className="hover:bg-white/[0.01] transition-all">
+                                <td className="py-3.5 px-4 font-bold text-white">
+                                  <div>
+                                    <p>{order.name} {order.surname}</p>
+                                    <p className="text-[10px] text-zinc-500 lowercase font-medium mt-0.5">{order.email}</p>
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4 font-mono text-xs text-zinc-400">
+                                  {order.id}
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  <span className={cn(
+                                    "px-2.5 py-0.5 rounded-[4px] text-[8px] font-black uppercase tracking-widest border",
+                                    order.ticketType === 'vip' 
+                                      ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-500" 
+                                      : "bg-purple-500/10 border-purple-500/20 text-purple-400"
+                                  )}>
+                                    {order.ticketType}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 text-center">
+                                  <div className="flex items-center justify-center">
+                                    <span className={cn(
+                                      "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider border",
+                                      isArrived 
+                                        ? "bg-green-500/10 border-green-500/20 text-green-400" 
+                                        : isPartial 
+                                        ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-400 animate-pulse" 
+                                        : "bg-zinc-900 border-zinc-800 text-zinc-500"
+                                    )}>
+                                      <span className={cn("w-1 h-1 rounded-full", isArrived ? "bg-green-400" : isPartial ? "bg-yellow-400" : "bg-zinc-650")} />
+                                      {order.scannedCount || 0} / {order.quantity || 1}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4 text-zinc-400 font-mono text-[10px]">
+                                  {order.scannedAt 
+                                    ? new Date(order.scannedAt).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) 
+                                    : '—'
+                                  }
+                                </td>
+                                <td className="py-3.5 px-4 text-right">
+                                  <div className="flex items-center justify-end gap-2">
+                                    {order.scannedCount > 0 && (
+                                      <button
+                                        onClick={() => handleManualReset(order)}
+                                        className="h-8 px-3 rounded-lg bg-zinc-900 hover:bg-zinc-850 text-zinc-400 border border-zinc-800 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                                        title="Скинути відмітки прохідності"
+                                      >
+                                        Скинути
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() => handleManualCheckIn(order)}
+                                      disabled={isArrived}
+                                      className={cn(
+                                        "h-8 px-4 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5",
+                                        isArrived 
+                                          ? "bg-zinc-900 text-zinc-600 border border-zinc-900 cursor-not-allowed" 
+                                          : "bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/10"
+                                      )}
+                                    >
+                                      <span>Пропустити</span>
+                                      <ArrowRight size={12} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {activeTab === 'scanner' && (
             <div className="max-w-xl mx-auto py-10 animate-in zoom-in-95 duration-300">
@@ -2277,6 +2710,40 @@ export default function AdminDashboard() {
                     </div>
                   </div>
                   <div className="space-y-1">
+                    <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Колір фонового світіння (HEX)</label>
+                    <div className="flex gap-2">
+                      <input 
+                        type="color" 
+                        value={tempConfig.bgGradientColor || '#1a0033'}
+                        onChange={e => setTempConfig({...tempConfig, bgGradientColor: e.target.value})}
+                        className="w-12 h-12 bg-zinc-800 border border-zinc-700 rounded-2xl p-1 focus:ring-2 focus:ring-purple-500 outline-none cursor-pointer"
+                      />
+                      <input 
+                        type="text" 
+                        value={tempConfig.bgGradientColor || '#1a0033'}
+                        onChange={e => setTempConfig({...tempConfig, bgGradientColor: e.target.value})}
+                        className="flex-1 h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono"
+                        placeholder="#1a0033"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center ml-1">
+                      <label className="text-xs font-bold text-zinc-500 uppercase">Інтенсивність світіння ({tempConfig.bgGradientOpacity ?? 100}%)</label>
+                    </div>
+                    <div className="flex items-center gap-4 bg-zinc-800 border border-zinc-700 rounded-2xl h-12 px-4">
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="100" 
+                        value={tempConfig.bgGradientOpacity ?? 100}
+                        onChange={e => setTempConfig({...tempConfig, bgGradientOpacity: parseInt(e.target.value)})}
+                        className="flex-1 accent-purple-500 cursor-pointer"
+                      />
+                      <span className="text-xs font-mono text-zinc-300 w-10 text-right">{tempConfig.bgGradientOpacity ?? 100}%</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
                     <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Заголовок банера</label>
                     <input 
                       type="text" 
@@ -2284,6 +2751,19 @@ export default function AdminDashboard() {
                       onChange={e => setTempConfig({...tempConfig, bannerTitle: e.target.value})}
                       className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none"
                     />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-zinc-500 uppercase ml-1">URL сайту / Домен (для повернення з Monobank)</label>
+                    <input 
+                      type="text" 
+                      value={tempConfig.siteUrl || ''}
+                      onChange={e => setTempConfig({...tempConfig, siteUrl: e.target.value})}
+                      className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none placeholder:text-zinc-600 text-sm"
+                      placeholder="https://skyparty.ua"
+                    />
+                    <p className="text-[10px] text-zinc-500 font-medium ml-1 leading-relaxed">
+                      Вкажіть ваш реальний робочий домен (наприклад, <code>https://skyparty.ua</code>), щоб після успішної оплати кнопка в Monobank повертала клієнта назад на ваш сайт.
+                    </p>
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Текст коли немає подій</label>
@@ -2790,7 +3270,7 @@ export default function AdminDashboard() {
                           const event = rawEvents.find(e => e.id === viewingOrder.eventId);
                           if (!event) return;
 
-                          const { getBase64ImageSafe, downloadTicketPDF } = await import('../services/pdfService');
+                          const { getBase64ImageSafe, generateQRCodeBase64, downloadTicketPDF } = await import('../services/pdfService');
 
                           let eventBase64Img = '';
                           if (event.imageUrl) {
@@ -2800,8 +3280,7 @@ export default function AdminDashboard() {
                           const qrCount = viewingOrder.quantity || 1;
                           const qrsBase64: string[] = [];
                           for (let i = 0; i < qrCount; i++) {
-                            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${viewingOrder.id}:${i + 1}`;
-                            const qrBase64 = await getBase64ImageSafe(qrUrl);
+                            const qrBase64 = await generateQRCodeBase64(`${viewingOrder.id}:${i + 1}`);
                             qrsBase64.push(qrBase64);
                           }
 
@@ -3050,7 +3529,7 @@ export default function AdminDashboard() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-zinc-500 uppercase ml-1">SMTP Password (ukr.net)</label>
+                  <label className="text-xs font-bold text-zinc-500 uppercase ml-1">SMTP Password (app password)</label>
                   <input 
                     type="password"
                     value={tempPrivate.smtpPass || ''}
@@ -3058,6 +3537,28 @@ export default function AdminDashboard() {
                     placeholder="Пароль для зовнішніх додатків"
                     className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono"
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-zinc-500 uppercase ml-1">SMTP Host (сервер)</label>
+                    <input 
+                      type="text"
+                      value={tempPrivate.smtpHost || ''}
+                      onChange={e => setTempPrivate({...tempPrivate, smtpHost: e.target.value})}
+                      placeholder="smtp.ukr.net"
+                      className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-zinc-500 uppercase ml-1">SMTP Port (порт)</label>
+                    <input 
+                      type="text"
+                      value={tempPrivate.smtpPort || ''}
+                      onChange={e => setTempPrivate({...tempPrivate, smtpPort: e.target.value})}
+                      placeholder="465"
+                      className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm"
+                    />
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Telegram Bot Token</label>

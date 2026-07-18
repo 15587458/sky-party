@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Stage, Layer, Circle, Rect, Text, Group, Transformer, Image } from 'react-konva';
+import Konva from 'konva';
 import useImage from 'use-image';
 import { ChartElement } from '../types';
 
@@ -56,6 +57,92 @@ export default function SeatingChartCanvas({
 }: SeatingChartCanvasProps) {
   const stageRef = useRef<any>(null);
   const transformerRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Responsive state logic
+  const [containerSize, setContainerSize] = useState({ width: width, height: height });
+  const [stageDraggable, setStageDraggable] = useState(!isAdmin);
+
+  useEffect(() => {
+    setStageDraggable(!isAdmin);
+  }, [isAdmin]);
+
+  useEffect(() => {
+    // Limit pixel ratio on mobile devices to improve performance significantly
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (isMobile) {
+      Konva.pixelRatio = 1;
+    } else {
+      Konva.pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!containerRef.current || isAdmin) return;
+    const observer = new ResizeObserver((entries) => {
+      if (!entries || entries.length === 0) return;
+      const { width: w } = entries[0].contentRect;
+      if (w > 0) {
+        setContainerSize({ 
+          width: w, 
+          height: w * (height / width) 
+        });
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, [isAdmin, width, height]);
+
+  const activeWidth = isAdmin ? width : containerSize.width;
+  const activeHeight = isAdmin ? height : containerSize.height;
+
+  // Let's compute a fit scale relative to the virtual coordinate system
+  const fitScale = useMemo(() => {
+    if (isAdmin) return 1;
+    return activeWidth / width;
+  }, [isAdmin, activeWidth, width]);
+
+  const initialLoadRef = useRef(true);
+
+  // Set the position and scale in Konva layer directly
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (stage && !isAdmin) {
+      if (initialLoadRef.current) {
+        stage.position({ x: 0, y: 0 });
+        stage.scaleX(fitScale * scale);
+        stage.scaleY(fitScale * scale);
+        stage.batchDraw();
+        initialLoadRef.current = false;
+      } else {
+        // Smoothly transition scale if viewport size changed
+        const currentScale = stage.scaleX();
+        const baseScale = fitScale * scale;
+        if (Math.abs(currentScale - baseScale) > 0.01) {
+          stage.scaleX(baseScale);
+          stage.scaleY(baseScale);
+          stage.batchDraw();
+        }
+      }
+    }
+  }, [fitScale, scale, isAdmin]);
+
+  const childrenMap = useMemo(() => {
+    const map: Record<string, ChartElement[]> = {};
+    elements.forEach(item => {
+      if (item.parentId) {
+        if (!map[item.parentId]) {
+          map[item.parentId] = [];
+        }
+        map[item.parentId].push(item);
+      }
+    });
+    return map;
+  }, [elements]);
+
+  const parentElements = useMemo(() => {
+    return elements.filter(el => !el.parentId);
+  }, [elements]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -88,21 +175,100 @@ export default function SeatingChartCanvas({
   }, [isAdmin, selectedId, elements, onUpdate]);
 
   const handleWheel = (e: any) => {
-    if (isAdmin) return;
     const scaleBy = 1.1;
     const stage = e.target.getStage();
     const oldScale = stage.scaleX();
+    const pointerPos = stage.getPointerPosition();
+    if (!pointerPos) return;
+
     const mousePointTo = {
-      x: stage.getPointerPosition().x / oldScale - stage.x() / oldScale,
-      y: stage.getPointerPosition().y / oldScale - stage.y() / oldScale,
+      x: pointerPos.x / oldScale - stage.x() / oldScale,
+      y: pointerPos.y / oldScale - stage.y() / oldScale,
     };
 
     const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
-    const finalScale = Math.max(0.2, Math.min(newScale, 5));
+    const finalScaleVal = Math.max(0.15 * fitScale, Math.min(5 * fitScale, newScale));
     
-    if (onScaleChange) {
-      onScaleChange(finalScale);
+    stage.scaleX(finalScaleVal);
+    stage.scaleY(finalScaleVal);
+
+    const newPos = {
+      x: pointerPos.x - mousePointTo.x * finalScaleVal,
+      y: pointerPos.y - mousePointTo.y * finalScaleVal,
+    };
+    stage.position(newPos);
+    stage.batchDraw();
+  };
+
+  // Mobile pinch-to-zoom handlers targeting the canvas rendering thread directly
+  const lastCenter = useRef<{ x: number, y: number } | null>(null);
+  const lastDist = useRef<number>(0);
+
+  const getDistance = (p1: { x: number, y: number }, p2: { x: number, y: number }) => {
+    return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+  };
+
+  const getCenter = (p1: { x: number, y: number }, p2: { x: number, y: number }) => {
+    return {
+      x: (p1.x + p2.x) / 2,
+      y: (p1.y + p2.y) / 2,
+    };
+  };
+
+  const handleTouchMove = (e: any) => {
+    const touch1 = e.evt.touches[0];
+    const touch2 = e.evt.touches[1];
+
+    if (touch1 && touch2) {
+      e.evt.preventDefault();
+      const stage = stageRef.current;
+      if (!stage) return;
+
+      const p1 = { x: touch1.clientX, y: touch1.clientY };
+      const p2 = { x: touch2.clientX, y: touch2.clientY };
+
+      if (!lastDist.current) {
+        lastDist.current = getDistance(p1, p2);
+        lastCenter.current = getCenter(p1, p2);
+        return;
+      }
+
+      const dist = getDistance(p1, p2);
+      const center = getCenter(p1, p2);
+
+      const oldScale = stage.scaleX();
+      const containerRect = stage.container().getBoundingClientRect();
+      const pointerPosition = {
+        x: center.x - containerRect.left,
+        y: center.y - containerRect.top,
+      };
+
+      const stagePointTo = {
+        x: (pointerPosition.x - stage.x()) / oldScale,
+        y: (pointerPosition.y - stage.y()) / oldScale,
+      };
+
+      const newScale = oldScale * (dist / lastDist.current);
+      const finalScaleVal = Math.max(0.15 * fitScale, Math.min(5 * fitScale, newScale));
+
+      const newPos = {
+        x: pointerPosition.x - stagePointTo.x * finalScaleVal,
+        y: pointerPosition.y - stagePointTo.y * finalScaleVal,
+      };
+
+      stage.scaleX(finalScaleVal);
+      stage.scaleY(finalScaleVal);
+      stage.position(newPos);
+      stage.batchDraw();
+
+      lastDist.current = dist;
+      lastCenter.current = center;
     }
+  };
+
+  const handleTouchEnd = () => {
+    lastDist.current = 0;
+    lastCenter.current = null;
   };
 
   useEffect(() => {
@@ -189,64 +355,68 @@ export default function SeatingChartCanvas({
       strokeWidth: isSelected ? 3 : (el.type === 'fanzone' ? 1 : 0),
       rotation: el.rotation || 0,
       listening: el.type === 'text' ? isAdmin : (!isOccupied || isAdmin || isSelectableAll),
+      perfectDrawEnabled: false
     };
 
     switch (el.type) {
       case 'seat':
-        // If it's a child seat, its coordinates are relative to the parent group
-        const seatX = el.parentId ? el.x : el.x;
-        const seatY = el.parentId ? el.y : el.y;
+        const seatX = el.x;
+        const seatY = el.y;
+        const radius = el.radius || 15;
         
         return (
-          <Group 
-            key={el.id} 
-            id={el.id}
-            x={seatX} 
-            y={seatY} 
-            draggable={isAdmin} 
-            onClick={(e) => {
-              e.cancelBubble = true;
-              onSelect?.(el.id);
-            }}
-            onTap={(e) => {
-              e.cancelBubble = true;
-              onSelect?.(el.id);
-            }}
-            onDragEnd={(e) => handleDragEnd(e, el.id)}
-            listening={!isOccupied || isAdmin || isSelectableAll}
-          >
+          <React.Fragment key={el.id}>
             <Circle
-              radius={el.radius || 15}
+              id={el.id}
+              x={seatX}
+              y={seatY}
+              radius={radius}
+              draggable={isAdmin}
+              onClick={(e) => {
+                e.cancelBubble = true;
+                onSelect?.(el.id);
+              }}
+              onTap={(e) => {
+                e.cancelBubble = true;
+                onSelect?.(el.id);
+              }}
+              onDragEnd={(e) => handleDragEnd(e, el.id)}
+              listening={!isOccupied || isAdmin || isSelectableAll}
               fill={isOccupied ? '#e4e4e7' : color}
               stroke={isSelected ? '#a855f7' : (isOccupied ? '#d4d4d8' : 'none')}
               strokeWidth={isSelected ? 3 : 2}
+              perfectDrawEnabled={false}
+              transformsEnabled="position"
             />
             <Text
+              x={seatX - radius}
+              y={seatY - radius}
+              width={radius * 2}
+              height={radius * 2}
               text={el.label || ''}
               fontSize={10}
               fontStyle="bold"
               fill={isOccupied ? '#a1a1aa' : (el.priceType === 'vip' || isSelected ? '#ffffff' : '#000000')}
               align="center"
               verticalAlign="middle"
-              offsetX={5}
-              offsetY={5}
               listening={false}
+              transformsEnabled="position"
             />
-          </Group>
+          </React.Fragment>
         );
 
       case 'table':
         const isTableSelectable = isAdmin || el.sellAsWhole || isSelectableAll;
         const seatsCount = el.seatsCount || 0;
-        const childSeats = elements.filter(child => child.parentId === el.id);
+        const childSeats = childrenMap[el.id] || [];
         
-        let width = el.width || 60;
-        let height = el.height || 60;
+        let widthVal = el.width || 60;
+        let heightVal = el.height || 60;
 
         // Auto-rectangular for 8 seats if not already adjusted
-        if (seatsCount === 8 && width === height) {
-          width = 120;
-          height = 60;
+        if (seatsCount === 8 && widthVal === heightVal) {
+          widthVal = 120;
+          heightVal = 60;
         }
         
         // Static seats (generated)
@@ -255,8 +425,8 @@ export default function SeatingChartCanvas({
           if (seatsCount === 4) {
             // 2 on Top, 2 on Bottom
             for (let i = 0; i < 2; i++) {
-              const tx = (width / 2) * (i + 0.5);
-              [[tx, -15], [tx, height + 15]].forEach(([sx, sy], idx) => {
+              const tx = (widthVal / 2) * (i + 0.5);
+              [[tx, -15], [tx, heightVal + 15]].forEach(([sx, sy], idx) => {
                 staticSeats.push(
                   <Circle
                     key={`seat-${el.id}-${i}-${idx}`}
@@ -267,6 +437,8 @@ export default function SeatingChartCanvas({
                     opacity={0.6}
                     stroke="#333"
                     strokeWidth={1}
+                    perfectDrawEnabled={false}
+                    transformsEnabled="position"
                   />
                 );
               });
@@ -274,8 +446,8 @@ export default function SeatingChartCanvas({
           } else if (seatsCount === 5) {
             // 2 on Top, 2 on Bottom, 1 on Left
             for (let i = 0; i < 2; i++) {
-              const tx = (width / 2) * (i + 0.5);
-              [[tx, -15], [tx, height + 15]].forEach(([sx, sy], idx) => {
+              const tx = (widthVal / 2) * (i + 0.5);
+              [[tx, -15], [tx, heightVal + 15]].forEach(([sx, sy], idx) => {
                 staticSeats.push(
                   <Circle
                     key={`seat-${el.id}-${i}-${idx}`}
@@ -286,6 +458,8 @@ export default function SeatingChartCanvas({
                     opacity={0.6}
                     stroke="#333"
                     strokeWidth={1}
+                    perfectDrawEnabled={false}
+                    transformsEnabled="position"
                   />
                 );
               });
@@ -294,19 +468,21 @@ export default function SeatingChartCanvas({
               <Circle
                 key={`seat-${el.id}-side`}
                 x={-15}
-                y={height / 2}
+                y={heightVal / 2}
                 radius={8}
                 fill={isOccupied ? '#111' : (el.priceType === 'vip' ? '#a855f7' : '#71717a')}
                 opacity={0.6}
                 stroke="#333"
                 strokeWidth={1}
+                perfectDrawEnabled={false}
+                transformsEnabled="position"
               />
             );
           } else if (seatsCount === 8) {
             // 4 on Top, 4 on Bottom
             for (let i = 0; i < 4; i++) {
-              const tx = (width / 4) * (i + 0.5);
-              [[tx, -15], [tx, height + 15]].forEach(([sx, sy], idx) => {
+              const tx = (widthVal / 4) * (i + 0.5);
+              [[tx, -15], [tx, heightVal + 15]].forEach(([sx, sy], idx) => {
                 staticSeats.push(
                   <Circle
                     key={`seat-${el.id}-${i}-${idx}`}
@@ -317,18 +493,20 @@ export default function SeatingChartCanvas({
                     opacity={0.6}
                     stroke="#333"
                     strokeWidth={1}
+                    perfectDrawEnabled={false}
+                    transformsEnabled="position"
                   />
                 );
               });
             }
           } else {
             // Original circular logic for other counts
-            const radiusX = width / 2 + 15;
-            const radiusY = height / 2 + 15;
+            const radiusX = widthVal / 2 + 15;
+            const radiusY = heightVal / 2 + 15;
             for (let i = 0; i < seatsCount; i++) {
               const angle = (i / seatsCount) * 2 * Math.PI;
-              const sx = width / 2 + radiusX * Math.cos(angle);
-              const sy = height / 2 + radiusY * Math.sin(angle);
+              const sx = widthVal / 2 + radiusX * Math.cos(angle);
+              const sy = heightVal / 2 + radiusY * Math.sin(angle);
               staticSeats.push(
                 <Circle
                   key={`seat-${el.id}-${i}`}
@@ -339,6 +517,8 @@ export default function SeatingChartCanvas({
                   opacity={0.6}
                   stroke="#333"
                   strokeWidth={1}
+                  perfectDrawEnabled={false}
+                  transformsEnabled="position"
                 />
               );
             }
@@ -357,21 +537,22 @@ export default function SeatingChartCanvas({
             {staticSeats}
             {childSeats.map(child => renderElement(child))}
             <Rect
-              width={width}
-              height={height}
+              width={widthVal}
+              height={heightVal}
               fill={color}
               cornerRadius={10}
               opacity={isOccupied ? 0.3 : 0.8}
               stroke={isSelected ? '#a855f7' : 'none'}
               strokeWidth={isSelected ? 3 : 2}
+              perfectDrawEnabled={false}
             />
             <Text
               text={el.label || 'T'}
               fontSize={12}
               fontStyle="bold"
               fill={isOccupied ? '#8e8e93' : (el.priceType === 'vip' ? '#fff' : '#000')}
-              width={width}
-              height={height}
+              width={widthVal}
+              height={heightVal}
               align="center"
               verticalAlign="middle"
               listening={false}
@@ -410,18 +591,41 @@ export default function SeatingChartCanvas({
   };
 
   return (
-    <div className="relative bg-white rounded-3xl border border-zinc-200 overflow-hidden shadow-xs">
+    <div 
+      ref={containerRef}
+      className="relative w-full h-full bg-white rounded-3xl border border-zinc-200 overflow-hidden shadow-xs"
+      style={{ touchAction: 'none' }}
+    >
       <Stage
-        width={width}
-        height={height}
+        width={activeWidth}
+        height={activeHeight}
         ref={stageRef}
-        scaleX={scale}
-        scaleY={scale}
-        draggable={!isAdmin}
+        draggable={stageDraggable}
         onWheel={handleWheel}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
         onMouseDown={(e) => {
           if (e.target === e.target.getStage()) {
             onSelect?.(null);
+            if (isAdmin) {
+              setStageDraggable(true);
+            }
+          } else {
+            if (isAdmin) {
+              setStageDraggable(false);
+            }
+          }
+        }}
+        onTouchStart={(e) => {
+          if (e.target === e.target.getStage()) {
+            onSelect?.(null);
+            if (isAdmin) {
+              setStageDraggable(true);
+            }
+          } else {
+            if (isAdmin) {
+              setStageDraggable(false);
+            }
           }
         }}
       >
@@ -437,6 +641,8 @@ export default function SeatingChartCanvas({
                width={1}
                height={height}
                fill="rgba(255,255,255,0.02)"
+               perfectDrawEnabled={false}
+               listening={false}
             />
           ))}
           {isAdmin && Array.from({ length: Math.ceil(height / GRID_SIZE) }).map((_, i) => (
@@ -447,17 +653,19 @@ export default function SeatingChartCanvas({
                width={width}
                height={1}
                fill="rgba(255,255,255,0.02)"
+               perfectDrawEnabled={false}
+               listening={false}
             />
           ))}
 
-          {elements.filter(el => !el.parentId).map(el => renderElement(el))}
+          {parentElements.map(el => renderElement(el))}
           
           {isAdmin && <Transformer ref={transformerRef} rotateEnabled keepRatio={false} />}
         </Layer>
       </Stage>
       
       {!isAdmin && elements.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center text-white/20 font-black uppercase tracking-widest text-xs">
+        <div className="absolute inset-0 flex items-center justify-center text-white/20 font-black uppercase tracking-widest text-xs pointer-events-none">
           Схема залу відсутня
         </div>
       )}

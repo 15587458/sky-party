@@ -3,7 +3,7 @@
   "appId": "1:222799449445:web:a679957cf10d04f53ce58c",
   "apiKey": "AIzaSyCktM1ZZ9dJTNcMaQ-JlVtxmcgozh9jxrM",
   "authDomain": "sky-party-a6fa4.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-6d0900b8-0afc-46e4-bba2-e44b1c84a874",
+  "firestoreDatabaseId": "(default)",
   "storageBucket": "sky-party-a6fa4.firebasestorage.app",
   "messagingSenderId": "222799449445",
   "measurementId": ""
