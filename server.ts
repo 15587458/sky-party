@@ -3,24 +3,28 @@ import path from "path";
 import axios from "axios";
 import nodemailer from "nodemailer";
 import { onRequest } from "firebase-functions/v2/https";
-import admin from "firebase-admin";
+import { initializeApp, getApps, getApp } from "firebase/app";
+import {
+  initializeFirestore,
+  doc,
+  getDoc,
+  updateDoc,
+  collection,
+  query,
+  where,
+  limit,
+  getDocs,
+} from "firebase/firestore";
 import firebaseConfig from "./firebase-applet-config.json";
 
 const app = express();
 const PORT = 3000;
 
-let dbAdmin: admin.firestore.Firestore;
-
-if (admin.apps.length === 0) {
-  admin.initializeApp({
-    projectId: firebaseConfig.projectId,
-  });
-}
-
-dbAdmin = new admin.firestore.Firestore({
-  projectId: firebaseConfig.projectId,
-  databaseId: firebaseConfig.firestoreDatabaseId
-});
+// Universal Firestore initialization (works on Render, Railway, Vercel, GCP, Localhost)
+const fbApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+const db = initializeFirestore(fbApp, {
+  experimentalForceLongPolling: true,
+}, firebaseConfig?.firestoreDatabaseId);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -182,9 +186,9 @@ app.get("/api/health", (req, res) => {
     }
 
     try {
-      const orderRef = dbAdmin.collection('orders').doc(orderId);
-      const isAlreadySentSnap = await orderRef.get();
-      if (!isAlreadySentSnap.exists) {
+      const orderRef = doc(db, 'orders', orderId);
+      const isAlreadySentSnap = await getDoc(orderRef);
+      if (!isAlreadySentSnap.exists()) {
         console.warn(`Purchase Notification -> Order ${orderId} not found, skipping notifications.`);
         return;
       }
@@ -199,21 +203,21 @@ app.get("/api/health", (req, res) => {
 
       // Fetch configurations and metadata to send the receipt
       const [privateSnap, configSnap, eventSnap] = await Promise.all([
-        dbAdmin.collection('settings').doc('private').get(),
-        dbAdmin.collection('config').doc('settings').get(),
-        dbAdmin.collection('events').doc(orderData.eventId).get()
+        getDoc(doc(db, 'settings', 'private')),
+        getDoc(doc(db, 'config', 'settings')),
+        getDoc(doc(db, 'events', orderData.eventId))
       ]);
 
-      const privateSettings = privateSnap.exists ? privateSnap.data() : null;
-      const config = configSnap.exists ? configSnap.data() : null;
-      const event = eventSnap.exists ? eventSnap.data() : null;
+      const privateSettings = privateSnap.exists() ? privateSnap.data() : null;
+      const config = configSnap.exists() ? configSnap.data() : null;
+      const event = eventSnap.exists() ? eventSnap.data() : null;
 
       // Load seating label if applicable
       let selectedSeat: any = null;
       if (orderData.elementId && event && event.chartId) {
         try {
-          const elementSnap = await dbAdmin.collection('charts').doc(event.chartId).collection('elements').doc(orderData.elementId).get();
-          if (elementSnap.exists) {
+          const elementSnap = await getDoc(doc(db, 'charts', event.chartId, 'elements', orderData.elementId));
+          if (elementSnap.exists()) {
             selectedSeat = elementSnap.data();
           }
         } catch (seatErr) {
@@ -421,7 +425,7 @@ app.get("/api/health", (req, res) => {
       }
 
       // All channels attempted. Now mark as completed in DB so we never infinite-loop
-      await orderRef.update({ notificationsSent: true });
+      await updateDoc(orderRef, { notificationsSent: true });
       console.log(`Purchase Notification -> Saved status 'notificationsSent: true' in database for order: ${orderId}`);
     } catch (bgError: any) {
       console.error("Purchase Notification Processing Error:", bgError);
@@ -441,8 +445,8 @@ app.get("/api/health", (req, res) => {
     let activeToken = token;
     if (!activeToken) {
       try {
-        const privateSnap = await dbAdmin.collection('settings').doc('private').get();
-        if (privateSnap.exists) {
+        const privateSnap = await getDoc(doc(db, 'settings', 'private'));
+        if (privateSnap.exists()) {
           activeToken = privateSnap.data()?.monobankToken;
         }
       } catch (err) {
@@ -459,10 +463,10 @@ app.get("/api/health", (req, res) => {
     }
 
     try {
-      const orderRef = dbAdmin.collection('orders').doc(orderId);
-      const orderSnap = await orderRef.get();
+      const orderRef = doc(db, 'orders', orderId);
+      const orderSnap = await getDoc(orderRef);
 
-      if (!orderSnap.exists) {
+      if (!orderSnap.exists()) {
         return res.status(404).json({ error: "Замовлення не знайдено" });
       }
 
@@ -506,15 +510,15 @@ app.get("/api/health", (req, res) => {
       const isPaid = monobankStatus === "success" || monobankStatus === "hold";
 
       if (isPaid && order.status !== 'paid') {
-        await orderRef.update({ status: 'paid' });
+        await updateDoc(orderRef, { status: 'paid' });
         console.log(`Status Check Secure -> Order ${orderId} is paid successfully!`);
         sendNotificationsForPaidOrder(orderId, { ...order, status: 'paid' });
         return res.json({ status: 'paid', order: { ...order, status: 'paid' } });
       } else if (monobankStatus === "reversed" && order.status !== "reversed" && order.status !== "cancelled") {
-        await orderRef.update({ status: "cancelled" });
+        await updateDoc(orderRef, { status: "cancelled" });
         return res.json({ status: 'cancelled', order: { ...order, status: 'cancelled' } });
       } else if ((monobankStatus === "failure" || monobankStatus === "expired") && order.status === "pending") {
-        await orderRef.update({ status: "cancelled" });
+        await updateDoc(orderRef, { status: "cancelled" });
         return res.json({ status: 'cancelled', order: { ...order, status: 'cancelled' } });
       }
 
@@ -555,9 +559,9 @@ app.get("/api/health", (req, res) => {
 
         // 1. Try finding order by reference (directly matching doc ID)
         if (orderId) {
-          const orderRef = dbAdmin.collection('orders').doc(orderId);
-          const orderSnap = await orderRef.get();
-          if (orderSnap.exists) {
+          const orderRef = doc(db, 'orders', orderId);
+          const orderSnap = await getDoc(orderRef);
+          if (orderSnap.exists()) {
             orderDoc = orderSnap;
           }
         }
@@ -565,7 +569,7 @@ app.get("/api/health", (req, res) => {
         // 2. Fallback: Search by monobankInvoiceId in orders collection
         if (!orderDoc && invoiceId) {
           console.log(`Webhook -> Order not found by reference ID. Searching orders by monobankInvoiceId = ${invoiceId}`);
-          const querySnap = await dbAdmin.collection('orders').where('monobankInvoiceId', '==', invoiceId).limit(1).get();
+          const querySnap = await getDocs(query(collection(db, 'orders'), where('monobankInvoiceId', '==', invoiceId), limit(1)));
           if (!querySnap.empty) {
             orderDoc = querySnap.docs[0];
             orderId = orderDoc.id;
@@ -580,8 +584,8 @@ app.get("/api/health", (req, res) => {
             // SECURE ROUND-CHECKING: Fetch private Monobank merchant API token to confirm the invoice status from Monobank's official API directly
             let activeToken = "";
             try {
-              const privateSnap = await dbAdmin.collection('settings').doc('private').get();
-              if (privateSnap.exists) {
+              const privateSnap = await getDoc(doc(db, 'settings', 'private'));
+              if (privateSnap.exists()) {
                 activeToken = privateSnap.data()?.monobankToken;
               }
             } catch (err) {
@@ -623,13 +627,13 @@ app.get("/api/health", (req, res) => {
               return res.status(400).json({ error: "Invoice is not paid" });
             }
 
-            const orderRef = dbAdmin.collection('orders').doc(orderId);
+            const orderRef = doc(db, 'orders', orderId);
             // Secure update: Mark order as paid
             const updateFields: any = { status: 'paid' };
             if (targetInvoiceId && !order.monobankInvoiceId) {
               updateFields.monobankInvoiceId = targetInvoiceId;
             }
-            await orderRef.update(updateFields);
+            await updateDoc(orderRef, updateFields);
             console.log(`Webhook secure check -> Order ${orderId} successfully validated and marked as paid.`);
 
             // Send notification triggers asynchronously
@@ -654,15 +658,15 @@ app.get("/api/health", (req, res) => {
         let orderId = reference;
 
         if (orderId) {
-          const orderRef = dbAdmin.collection('orders').doc(orderId);
-          const orderSnap = await orderRef.get();
-          if (orderSnap.exists) {
+          const orderRef = doc(db, 'orders', orderId);
+          const orderSnap = await getDoc(orderRef);
+          if (orderSnap.exists()) {
             orderDoc = orderSnap;
           }
         }
 
         if (!orderDoc && invoiceId) {
-          const querySnap = await dbAdmin.collection('orders').where('monobankInvoiceId', '==', invoiceId).limit(1).get();
+          const querySnap = await getDocs(query(collection(db, 'orders'), where('monobankInvoiceId', '==', invoiceId), limit(1)));
           if (!querySnap.empty) {
             orderDoc = querySnap.docs[0];
             orderId = orderDoc.id;
@@ -672,8 +676,8 @@ app.get("/api/health", (req, res) => {
         if (orderDoc) {
           const order = orderDoc.data() as any;
           if (order.status === 'pending') {
-            const orderRef = dbAdmin.collection('orders').doc(orderId);
-            await orderRef.update({ status: 'cancelled' });
+            const orderRef = doc(db, 'orders', orderId);
+            await updateDoc(orderRef, { status: 'cancelled' });
             console.log(`Webhook -> Successfully updated status of order ${orderId} to 'cancelled' upon failed/cancelled notice.`);
           }
         }
@@ -692,8 +696,8 @@ app.get("/api/health", (req, res) => {
     // Server-side secure fallback for SMTP credentials if client didn't supply them
     if (!smtpUser || !smtpPass) {
       try {
-        const privateSnap = await dbAdmin.collection('settings').doc('private').get();
-        if (privateSnap.exists) {
+        const privateSnap = await getDoc(doc(db, 'settings', 'private'));
+        if (privateSnap.exists()) {
           const pData = privateSnap.data();
           if (!smtpUser && pData?.smtpUser) smtpUser = pData.smtpUser;
           if (!smtpPass && pData?.smtpPass) smtpPass = pData.smtpPass;
@@ -812,8 +816,8 @@ app.get("/api/health", (req, res) => {
         let chatId = process.env.TELEGRAM_CHAT_ID;
 
         try {
-          const privateSnap = await dbAdmin.collection('settings').doc('private').get();
-          if (privateSnap.exists) {
+          const privateSnap = await getDoc(doc(db, 'settings', 'private'));
+          if (privateSnap.exists()) {
             const pData = privateSnap.data();
             if (pData?.telegramBotToken) botToken = String(pData.telegramBotToken).trim();
             if (pData?.telegramChatId) chatId = String(pData.telegramChatId).trim();
