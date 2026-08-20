@@ -48,3 +48,22 @@ body {
   pointer-events: none;
 }
 
+/* Optimize and modernize the QR Scanner layout and video feed */
+#reader {
+  border: none !important;
+  background-color: transparent !important;
+}
+
+#reader video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  border-radius: 32px !important;
+}
+
+/* Soften the overlay scanning window boundary if drawn by html5-qrcode */
+#reader__qr-shaded-region {
+  border-radius: 32px !important;
+}
+
+

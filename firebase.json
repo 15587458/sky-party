@@ -21,12 +21,21 @@
   "functions": {
     "source": ".",
     "codebase": "default",
+    "predeploy": [
+      "npm run build"
+    ],
     "ignore": [
       "node_modules",
       ".git",
+      "package-lock.json",
+      "bun.lock",
+      "bun.lockb",
+      "yarn.lock",
       "firebase-debug.log",
-      "firestore-debug.log"
-    ],
-    "runtime": "nodejs22"
+      "firebase-debug.*.log",
+      "firestore-debug.log",
+      "src/**",
+      "public/**"
+    ]
   }
 }

@@ -8,7 +8,7 @@ import { cn } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 
 export default function QRScanner() {
-  const { events, loadChartElements, privateSettings } = useApp();
+  const { rawEvents: events, loadChartElements, privateSettings } = useApp();
   const [selectedEventId, setSelectedEventId] = useState<string>('');
   const [typedEventId, setTypedEventId] = useState<string>('');
   const [scanResult, setScanResult] = useState<{ 
@@ -58,14 +58,23 @@ export default function QRScanner() {
 
     setIsScanning(true);
 
+    const scanConfig = {
+      fps: 30,
+      qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+        return { width: minEdge, height: minEdge };
+      },
+      aspectRatio: 1.0,
+      experimentalFeatures: {
+        useBarCodeDetectorIfSupported: true
+      }
+    };
+
     try {
       try {
         await scannerRef.current.start(
           { facingMode: "environment" },
-          {
-            fps: 10,
-            qrbox: { width: 250, height: 250 },
-          },
+          scanConfig,
           async (decodedText) => {
             handleScan(decodedText);
             await stopScanner();
@@ -80,10 +89,7 @@ export default function QRScanner() {
         try {
           await scannerRef.current.start(
             { facingMode: "user" },
-            {
-              fps: 10,
-              qrbox: { width: 250, height: 250 },
-            },
+            scanConfig,
             async (decodedText) => {
               handleScan(decodedText);
               await stopScanner();
@@ -102,10 +108,7 @@ export default function QRScanner() {
           if (devices && devices.length > 0) {
             await scannerRef.current.start(
               devices[0].id,
-              {
-                fps: 10,
-                qrbox: { width: 250, height: 250 },
-              },
+              scanConfig,
               async (decodedText) => {
                 handleScan(decodedText);
                 await stopScanner();

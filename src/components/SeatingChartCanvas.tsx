@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Stage, Layer, Circle, Rect, Text, Group, Transformer, Image } from 'react-konva';
 import Konva from 'konva';
 import useImage from 'use-image';
-import { ChartElement } from '../types';
+import { ChartElement, TerritoryConfig } from '../types';
 
 interface SeatingChartCanvasProps {
   elements: ChartElement[];
   backgroundImage?: string;
+  territory?: TerritoryConfig;
   onUpdate?: (elements: ChartElement[]) => void;
   onSelect?: (id: string | null) => void;
   selectedId?: string | null;
@@ -44,17 +45,21 @@ const BackgroundImage = ({ url, width, height }: { url: string, width: number, h
 export default function SeatingChartCanvas({
   elements,
   backgroundImage,
+  territory,
   onUpdate,
   onSelect,
   selectedId,
   isAdmin = false,
   occupiedIds = [],
-  width = 800,
-  height = 600,
+  width: propWidth = 1200,
+  height: propHeight = 800,
   scale = 1,
   onScaleChange,
   isSelectableAll = false
 }: SeatingChartCanvasProps) {
+  const width = territory?.width || propWidth;
+  const height = territory?.height || propHeight;
+
   const stageRef = useRef<any>(null);
   const transformerRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -560,29 +565,138 @@ export default function SeatingChartCanvas({
           </Group>
         );
 
-      case 'fanzone':
+      case 'shape':
         return (
-          <Rect
+          <Group
             key={el.id}
-            {...commonProps}
-            width={el.width || 100}
-            height={el.height || 100}
-            fill={color}
-            dash={[5, 5]}
-            label={el.label}
-          />
+            x={el.x}
+            y={el.y}
+            draggable={isAdmin}
+            id={el.id}
+            onClick={() => isAdmin && onSelect?.(el.id)}
+            onTap={() => isAdmin && onSelect?.(el.id)}
+            onDragEnd={(e) => handleDragEnd(e, el.id)}
+            onTransformEnd={(e) => handleTransformEnd(e, el.id)}
+            listening={isAdmin}
+            rotation={el.rotation || 0}
+          >
+            <Rect
+              width={el.width || 120}
+              height={el.height || 80}
+              fill={el.fill || '#27272a'}
+              cornerRadius={8}
+              stroke={isSelected ? '#a855f7' : (el.fill ? '#52525b' : 'none')}
+              strokeWidth={isSelected ? 3 : 1}
+              perfectDrawEnabled={false}
+            />
+            {el.label && (
+              <Text
+                text={el.label}
+                fontSize={14}
+                fontStyle="bold"
+                fill="#ffffff"
+                width={el.width || 120}
+                height={el.height || 80}
+                align="center"
+                verticalAlign="middle"
+                listening={false}
+              />
+            )}
+          </Group>
+        );
+
+      case 'fanzone':
+        const fanW = el.width || 220;
+        const fanH = el.height || 110;
+        return (
+          <Group
+            key={el.id}
+            x={el.x}
+            y={el.y}
+            draggable={isAdmin}
+            id={el.id}
+            onClick={() => (!isOccupied || isAdmin || isSelectableAll) && onSelect?.(el.id)}
+            onTap={() => (!isOccupied || isAdmin || isSelectableAll) && onSelect?.(el.id)}
+            onDragEnd={(e) => handleDragEnd(e, el.id)}
+            onTransformEnd={(e) => handleTransformEnd(e, el.id)}
+            listening={!isOccupied || isAdmin || isSelectableAll}
+            rotation={el.rotation || 0}
+          >
+            <Rect
+              width={fanW}
+              height={fanH}
+              fill={el.fill || '#9333ea'}
+              opacity={0.35}
+              cornerRadius={12}
+              stroke={isSelected ? '#ffffff' : (el.fill || '#c084fc')}
+              strokeWidth={isSelected ? 3 : 2}
+              dash={[6, 4]}
+              perfectDrawEnabled={false}
+            />
+            <Text
+              text={el.label || 'ФАН-ЗОНА'}
+              fontSize={14}
+              fontStyle="bold"
+              fill="#ffffff"
+              width={fanW}
+              height={fanH - (el.capacity ? 18 : 0)}
+              align="center"
+              verticalAlign="middle"
+              listening={false}
+            />
+            {el.capacity ? (
+              <Text
+                text={`до ${el.capacity} ос.`}
+                fontSize={11}
+                fontStyle="bold"
+                fill="#e9d5ff"
+                y={fanH / 2 + 10}
+                width={fanW}
+                align="center"
+                listening={false}
+              />
+            ) : null}
+          </Group>
         );
 
       case 'text':
+        const txtW = Math.max(64, (el.label?.length || 4) * 12 + 16);
+        const txtH = Math.max(28, (el.radius || 14) + 14);
         return (
-          <Text
+          <Group
             key={el.id}
-            {...commonProps}
-            text={el.label || 'Text'}
-            fontSize={el.radius || 20}
-            fill="#09090b"
-            fontStyle="bold"
-          />
+            x={el.x}
+            y={el.y}
+            draggable={isAdmin}
+            id={el.id}
+            onClick={() => isAdmin && onSelect?.(el.id)}
+            onTap={() => isAdmin && onSelect?.(el.id)}
+            onDragEnd={(e) => handleDragEnd(e, el.id)}
+            onTransformEnd={(e) => handleTransformEnd(e, el.id)}
+            listening={isAdmin}
+            rotation={el.rotation || 0}
+          >
+            <Rect
+              width={txtW}
+              height={txtH}
+              fill={isSelected ? 'rgba(147, 51, 234, 0.95)' : (el.label?.toUpperCase() === 'ВХІД' ? 'rgba(202, 138, 4, 0.9)' : 'rgba(15, 23, 42, 0.85)')}
+              cornerRadius={8}
+              stroke={isSelected ? '#c084fc' : 'rgba(255,255,255,0.2)'}
+              strokeWidth={isSelected ? 2 : 1}
+              perfectDrawEnabled={false}
+            />
+            <Text
+              text={el.label || 'ТЕКСТ'}
+              fontSize={el.radius || 13}
+              fontStyle="bold"
+              fill={el.fill || '#ffffff'}
+              width={txtW}
+              height={txtH}
+              align="center"
+              verticalAlign="middle"
+              listening={false}
+            />
+          </Group>
         );
 
       default:
@@ -593,7 +707,7 @@ export default function SeatingChartCanvas({
   return (
     <div 
       ref={containerRef}
-      className="relative w-full h-full bg-white rounded-3xl border border-zinc-200 overflow-hidden shadow-xs"
+      className="relative w-full h-full bg-[#09090b] rounded-3xl border border-white/10 overflow-hidden shadow-2xl"
       style={{ touchAction: 'none' }}
     >
       <Stage
@@ -630,29 +744,43 @@ export default function SeatingChartCanvas({
         }}
       >
         <Layer>
+          {/* Territory Floor & Boundary */}
+          <Rect
+            x={0}
+            y={0}
+            width={width}
+            height={height}
+            fill={territory?.floorColor ? `${territory.floorColor}18` : 'rgba(255,255,255,0.015)'}
+            stroke={territory?.wallColor ? `${territory.wallColor}66` : 'rgba(255,255,255,0.1)'}
+            strokeWidth={2}
+            cornerRadius={16}
+            listening={false}
+            perfectDrawEnabled={false}
+          />
+
           {backgroundImage && <BackgroundImage url={backgroundImage} width={width} height={height} />}
           
           {/* Grid Background */}
-          {isAdmin && Array.from({ length: Math.ceil(width / GRID_SIZE) }).map((_, i) => (
+          {isAdmin && (territory?.showGrid !== false) && Array.from({ length: Math.ceil(width / GRID_SIZE) }).map((_, i) => (
             <Rect
                key={`v-${i}`}
                x={i * GRID_SIZE}
                y={0}
                width={1}
                height={height}
-               fill="rgba(255,255,255,0.02)"
+               fill="rgba(255,255,255,0.03)"
                perfectDrawEnabled={false}
                listening={false}
             />
           ))}
-          {isAdmin && Array.from({ length: Math.ceil(height / GRID_SIZE) }).map((_, i) => (
+          {isAdmin && (territory?.showGrid !== false) && Array.from({ length: Math.ceil(height / GRID_SIZE) }).map((_, i) => (
             <Rect
                key={`h-${i}`}
                x={0}
                y={i * GRID_SIZE}
                width={width}
                height={1}
-               fill="rgba(255,255,255,0.02)"
+               fill="rgba(255,255,255,0.03)"
                perfectDrawEnabled={false}
                listening={false}
             />

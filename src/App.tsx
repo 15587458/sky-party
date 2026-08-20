@@ -741,17 +741,12 @@ function Home() {
               </div>
             </div>
 
-            <div className="flex flex-col items-start md:items-end text-left md:text-right gap-4">
+            <div className="flex flex-col items-start md:items-end text-left md:text-right gap-3">
                <Link 
                 to="/about"
                 className="text-sm font-black tracking-[0.3em] uppercase text-white hover:text-neon-purple transition-all border-b border-white/20 pb-1 cursor-pointer"
                >
                  Про нас
-               </Link>
-               <Link 
-                to="/admin"
-                className="hidden"
-               >
                </Link>
             </div>
           </div>

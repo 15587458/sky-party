@@ -3,6 +3,27 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export type VenueType = 'indoor' | 'openair' | 'club' | 'theater' | 'tent' | 'banquet' | 'arena' | 'open_air';
+export type FloorMaterialType = 'parquet' | 'concrete' | 'dark_slate' | 'grass' | 'asphalt' | 'carpet_red' | 'carpet_blue' | 'marble' | 'dancefloor' | 'wood' | 'grid';
+export type LightingPresetType = 'neon_club' | 'warm_ambient' | 'daylight' | 'night_festival' | 'cyberpunk' | 'club' | 'warm' | 'concert' | 'minimal';
+
+export interface TerritoryConfig {
+  width: number; // 2D units (default: 1200)
+  height: number; // 2D units (default: 800)
+  venueType: VenueType;
+  floorColor?: string;
+  floorMaterial: FloorMaterialType;
+  wallColor?: string;
+  wallHeight?: number;
+  wallVisible?: boolean;
+  showWalls?: boolean;
+  lightingPreset: LightingPresetType;
+  ambientIntensity?: number;
+  pointIntensity?: number;
+  showGrid?: boolean;
+  name?: string;
+}
+
 export interface ChartElement {
   id: string;
   type: 'seat' | 'table' | 'fanzone' | 'text' | 'shape';
@@ -30,6 +51,7 @@ export interface Chart {
   elements?: ChartElement[];
   elementsCount?: number; 
   backgroundImage?: string;
+  territory?: TerritoryConfig;
   createdAt: number;
   updatedAt?: any;
 }

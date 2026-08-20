@@ -17,103 +17,10 @@ if (admin.apps.length === 0) {
   });
 }
 
-const adminDatabaseId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === "(default)")
-  ? "(default)"
-  : firebaseConfig.firestoreDatabaseId;
-
 dbAdmin = new admin.firestore.Firestore({
   projectId: firebaseConfig.projectId,
-  databaseId: adminDatabaseId
+  databaseId: firebaseConfig.firestoreDatabaseId
 });
-
-async function ensureDefaultDatabaseSeeded() {
-  console.log(`Checking database '${adminDatabaseId}' for automatic seeding...`);
-  try {
-    const eventsSnap = await dbAdmin.collection('events').limit(1).get();
-    if (eventsSnap.empty) {
-      console.log("Database is empty. Initiating automatic seeding...");
-
-      // 1. Config settings
-      const defaultConfig = {
-        logoUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500' width='500' height='500'%3E%3Cdefs%3E%3ClinearGradient id='gold' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFE082' /%3E%3Cstop offset='30%25' stop-color='%23FFB300' /%3E%3Cstop offset='50%25' stop-color='%23FFF8E1' /%3E%3Cstop offset='70%25' stop-color='%23FFC107' /%3E%3Cstop offset='100%25' stop-color='%23B78A02' /%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='250' cy='250' r='195' fill='none' stroke='url(%23gold)' stroke-width='4.5' /%3E%3Ccircle cx='250' cy='250' r='181' fill='none' stroke='url(%23gold)' stroke-width='1.5' /%3E%3Cg transform='translate(0, -5)'%3E%3Cpath d='M 226 185 a 14 14 0 0 1 18 -11 a 20 20 0 0 1 27 -4 a 18 18 0 0 1 11 19 a 13 13 0 0 1 -3 9 l -50 0 a 14 14 0 0 1 -3 -13 Z' fill='white' opacity='0.95' /%3E%3Cpath d='M 283 162 L 284.5 166 L 288.5 166 L 285.3 168.5 L 286.5 172.5 L 283 170 L 279.5 172.5 L 280.7 168.5 L 277.5 166 L 281.5 166 Z' fill='url(%23gold)' /%3E%3C/g%3E%3Ctext x='250' y='278' font-family='sans-serif' font-size='68' font-weight='900' fill='url(%23gold)' text-anchor='middle' letter-spacing='12'%3ESKY%3C/text%3E%3Ctext x='250' y='348' font-family='sans-serif' font-size='62' font-weight='900' fill='url(%23gold)' text-anchor='middle' letter-spacing='10'%3EPARTY%3C/text%3E%3C/svg%3E",
-        instagramUrl: 'https://instagram.com/sky_party_kyiv',
-        telegramUrl: 'https://t.me/sky_party_kyiv',
-        facebookUrl: 'https://facebook.com/skypartykyiv',
-        bannerTitle: 'SKY PARTY',
-        footerText: 'SKY PARTY — ТВОЄ НЕБО, ТВОЯ ВЕЧІРКА.',
-        noEventsMessage: 'Зараз немає актуальних подій',
-        aboutText: `Sky Party — це не просто серія вечірок, а новий рівень нічного життя та твій унікальний вимір нічних івентів. Ми об'єднуємо кращих артистів, сучасне світлове шоу та неповторну атмосферу, щоб створити незабутні спогади, що залишаються назавжди.\n\nНаша місія — дарувати емоції через преміальний звук та візуальне мистецтво. Кожна подія продумана до найдрібніших деталей, від вибору унікальної локації до коктейльної карти.`,
-        contactEmail: 'info@skyparty.ua',
-        contactAddress: 'м. Київ, вул. Паркова, 12',
-        primaryColor: '#a855f7'
-      };
-      await dbAdmin.collection('config').doc('settings').set(defaultConfig);
-      console.log("Seeded config/settings.");
-
-      // 2. Private Settings
-      const defaultPrivateSettings = {
-        monobankToken: "",
-        smtpUser: "",
-        smtpPass: "",
-        telegramBotToken: "",
-        telegramChatId: ""
-      };
-      await dbAdmin.collection('settings').doc('private').set(defaultPrivateSettings);
-      console.log("Seeded settings/private.");
-
-      // 3. Create default seating chart
-      const chartId = 'default-chart-1';
-      const defaultChart = {
-        name: 'SKY GARDEN Seating Chart',
-        backgroundImage: '',
-        elementsCount: 6,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      };
-      await dbAdmin.collection('charts').doc(chartId).set(defaultChart);
-      console.log("Seeded default chart.");
-
-      // 4. Create default seating elements
-      const elements = [
-        { id: 'seat-1', type: 'seat', x: 200, y: 150, label: 'Стіл 1, Місце A', priceType: 'standard', parentId: '' },
-        { id: 'seat-2', type: 'seat', x: 200, y: 220, label: 'Стіл 1, Місце B', priceType: 'standard', parentId: '' },
-        { id: 'seat-3', type: 'seat', x: 400, y: 150, label: 'Стіл 2, Місце A', priceType: 'standard', parentId: '' },
-        { id: 'seat-4', type: 'seat', x: 400, y: 220, label: 'Стіл 2, Місце B', priceType: 'standard', parentId: '' },
-        { id: 'seat-5', type: 'seat', x: 600, y: 150, label: 'VIP Стіл 3, Місце A', priceType: 'vip', parentId: '' },
-        { id: 'seat-6', type: 'seat', x: 600, y: 220, label: 'VIP Стіл 3, Місце B', priceType: 'vip', parentId: '' }
-      ];
-      const elementsCol = dbAdmin.collection('charts').doc(chartId).collection('elements');
-      for (const el of elements) {
-        await elementsCol.doc(el.id).set(el);
-      }
-      console.log("Seeded default chart elements.");
-
-      // 5. Create default active event
-      const defaultEvent = {
-        title: 'SKY PARTY: OPEN AIR',
-        description: 'Найкраща вечірка літа. Танці під відкритим небом, коктейлі та неймовірна атмосфера.',
-        date: '2026-08-15T20:00', // Future date
-        location: 'Київ, SKY GARDEN',
-        price: '500',
-        vipPrice: '1500',
-        imageUrl: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&q=80',
-        ticketLink: '#',
-        isActive: true,
-        chartId: chartId,
-        hasSeatingChart: true,
-        createdAt: Date.now()
-      };
-      await dbAdmin.collection('events').add(defaultEvent);
-      console.log("Seeded default active event.");
-
-      console.log("Database automatic seeding completed successfully!");
-    } else {
-      console.log("Database contains existing events. Skipping seeding.");
-    }
-  } catch (err) {
-    console.error("Error during automatic database seeding:", err);
-  }
-}
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -139,37 +46,79 @@ app.get("/api/health", (req, res) => {
 
     if (!token) {
       console.warn("Monobank Invoice Error: Token is missing from the request.");
-      return res.status(400).json({ error: "X-Token Monobank є обов'язковим для створення інвойсу" });
+      return res.status(400).json({ error: "X-Token Monobank є обов'язковим для створення інвойсу. Вкажіть його в налаштуваннях адмін-панелі." });
     }
 
+    const trimmedToken = String(token).trim();
+
     try {
+      const monobankPayload: any = {
+        amount: Math.round(Number(amount)),
+        ccy: Number(ccy) || 980,
+      };
+
+      if (merchantPaymInfo) {
+        monobankPayload.merchantPaymInfo = {
+          reference: String(merchantPaymInfo.reference || reference || "").slice(0, 100),
+          destination: String(merchantPaymInfo.destination || "Оплата замовлення").slice(0, 100),
+          comment: merchantPaymInfo.comment ? String(merchantPaymInfo.comment).slice(0, 100) : undefined,
+        };
+      }
+
+      if (redirectUrl) {
+        monobankPayload.redirectUrl = redirectUrl;
+      }
+
+      if (webHookUrl && String(webHookUrl).startsWith("https://") && !String(webHookUrl).includes("localhost")) {
+        monobankPayload.webHookUrl = webHookUrl;
+      }
+
+      console.log("Sending payload to Monobank:", JSON.stringify(monobankPayload));
+
       const response = await axios.post(
         "https://api.monobank.ua/api/merchant/invoice/create",
-        { amount, ccy, reference, merchantPaymInfo, redirectUrl, webHookUrl },
-        { headers: { "X-Token": token } }
+        monobankPayload,
+        { 
+          headers: { 
+            "X-Token": trimmedToken,
+            "Content-Type": "application/json"
+          },
+          timeout: 15000
+        }
       );
+      
       console.log("Monobank Invoice Created Successfully:", response.data);
       res.json(response.data);
     } catch (error: any) {
       const errorData = error.response?.data || error.message;
-      console.error("Monobank Invoice Creation API Error:", errorData);
+      const statusCode = error.response?.status || 500;
+      console.error("Monobank Invoice Creation API Error:", statusCode, errorData);
       
-      let friendlyError = errorData;
+      let friendlyError = "Не вдалося створити рахунок в Monobank";
+      
+      if (errorData) {
+        if (typeof errorData === "object") {
+          if (errorData.errText) {
+            friendlyError = `Monobank помилка: ${errorData.errText} (${errorData.errCode || 'ERROR'})`;
+          } else if (errorData.message) {
+            friendlyError = `Помилка: ${errorData.message}`;
+          } else if (errorData.error) {
+            friendlyError = typeof errorData.error === "string" ? errorData.error : (errorData.error.errText || JSON.stringify(errorData.error));
+          } else {
+            friendlyError = JSON.stringify(errorData);
+          }
+        } else if (typeof errorData === "string") {
+          friendlyError = errorData;
+        }
+      }
+      
       const isNetworkError = error.code === "ENOTFOUND" || error.code === "ETIMEDOUT" || error.message?.includes("ENOTFOUND") || error.message?.includes("ETIMEDOUT") || error.message?.includes("timeout");
       
       if (isNetworkError) {
-        let rawDetail = "";
-        if (typeof errorData === "object") {
-          rawDetail = JSON.stringify(errorData);
-        } else {
-          rawDetail = String(errorData);
-        }
-        
-        friendlyError = {
-          errText: `Помилка мережі (Код: ${error.code || 'TIMEOUT'}, Опис: ${error.message}). Якщо ви виявили це на Firebase hosting, переконайтеся, що ви вже підключили тариф Blaze і повторно розгорнули (deploy) проєкт. Spark-план повністю блокує будь-які запити до зовнішніх сайтів. Деталі помилки: ${rawDetail}`
-        };
+        friendlyError = `Помилка зв'язку з Monobank API (${error.code || 'TIMEOUT'}). Переконайтеся, що на Firebase підключено план Blaze і є доступ до Інтернету.`;
       }
-      res.status(500).json({ error: friendlyError || "Internal Server Error" });
+      
+      res.status(statusCode).json({ error: friendlyError });
     }
   });
 
@@ -903,16 +852,19 @@ app.get("/api/health", (req, res) => {
     }
   });
 
-  // Register development Vite middleware or production static site loader
+  // Register development Vite middleware or production static site loader (only in standalone Node server mode)
   async function startServer() {
-    await ensureDefaultDatabaseSeeded();
     if (process.env.NODE_ENV !== "production") {
-      const { createServer: createViteServer } = await import("vite");
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "spa",
-      });
-      app.use(vite.middlewares);
+      try {
+        const { createServer: createViteServer } = await import("vite");
+        const vite = await createViteServer({
+          server: { middlewareMode: true },
+          appType: "spa",
+        });
+        app.use(vite.middlewares);
+      } catch (viteErr) {
+        console.warn("Vite middleware could not be loaded, continuing without Vite middleware:", viteErr);
+      }
     } else {
       const distPath = path.join(process.cwd(), "dist");
       app.use(express.static(distPath));
@@ -921,14 +873,15 @@ app.get("/api/health", (req, res) => {
       });
     }
 
-    if (!process.env.FUNCTION_TARGET) {
-      app.listen(PORT, "0.0.0.0", () => {
-        console.log(`Server running on http://localhost:${PORT}`);
-      });
-    }
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   }
 
-  startServer().catch(console.error);
+  // Start server in dev/standalone mode
+  if (!process.env.FUNCTION_TARGET) {
+    startServer().catch(console.error);
+  }
 
   // Export the Firebase function
   export const api = onRequest({

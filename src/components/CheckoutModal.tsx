@@ -114,25 +114,39 @@ export default function CheckoutModal({ event, ticketType, selectedSeat, initial
 
       // Handle Monobank Payment
       if (privateSettings?.monobankToken) {
+        // Determine reliable return domain for Monobank redirect:
         let baseDomain = window.location.origin;
+
+        // If admin configured siteUrl, use it when current window is localhost or invalid
         if (config?.siteUrl && config.siteUrl.trim() !== '') {
           let cleanUrl = config.siteUrl.trim();
           if (!cleanUrl.toLowerCase().startsWith('http://') && !cleanUrl.toLowerCase().startsWith('https://')) {
             cleanUrl = 'https://' + cleanUrl;
           }
-          baseDomain = cleanUrl.replace(/\/+$/, '');
+          const formattedConfigUrl = cleanUrl.replace(/\/+$/, '');
+          
+          if (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')) {
+            baseDomain = formattedConfigUrl;
+          } else {
+            // Use current origin if already on live HTTPS, otherwise fallback to configured URL
+            baseDomain = window.location.origin.startsWith('https://') ? window.location.origin : formattedConfigUrl;
+          }
         }
 
+        baseDomain = baseDomain.replace(/\/+$/, '');
+        const redirectUrl = `${baseDomain}/?paid=${orderId}`;
+
         const payload: any = {
-          amount: totalPrice * 100, // in kopecks
+          amount: Math.round(totalPrice * 100), // in kopecks (integer)
           ccy: 980, // UAH
           reference: orderId, // Top-level reference for tracking
           merchantPaymInfo: {
-            destination: `${quantity} квитків на ${event.title}`,
-            comment: `Order: ${orderId}`,
+            reference: orderId,
+            destination: `${quantity} квитків на ${event.title}`.slice(0, 100),
+            comment: `Order: ${orderId}`.slice(0, 100),
           },
-          redirectUrl: `${baseDomain}/?paid=${orderId}`,
-          token: privateSettings.monobankToken
+          redirectUrl,
+          token: privateSettings.monobankToken.trim()
         };
 
         // Monobank webhooks strictly require a public HTTPS URL. Skip for localhost or non-https.
@@ -141,7 +155,7 @@ export default function CheckoutModal({ event, ticketType, selectedSeat, initial
         }
 
         const response = await axios.post('/api/monobank/invoice', payload);
-        if (response.data.pageUrl) {
+        if (response.data && response.data.pageUrl) {
           if (response.data.invoiceId) {
             await setDoc(doc(db, 'orders', orderId), {
               ...orderData,
@@ -151,31 +165,52 @@ export default function CheckoutModal({ event, ticketType, selectedSeat, initial
           }
           window.location.href = response.data.pageUrl;
         } else {
-          throw new Error('Помилка створення інвойсу');
+          let detailedMsg = 'Помилка створення інвойсу';
+          if (response.data) {
+            if (typeof response.data === 'string' && (response.data.includes('<!DOCTYPE') || response.data.includes('<html'))) {
+              detailedMsg = 'Сервер бекенду ще не розгорнуто (отримано HTML замість відповіді API). Запустіть firebase deploy.';
+            } else if (typeof response.data === 'object') {
+              detailedMsg = response.data.errText || response.data.error || response.data.message || JSON.stringify(response.data);
+            }
+          }
+          throw new Error(detailedMsg);
         }
       } else {
         setError('Система оплати не налаштована. Зверніться до адміністратора.');
       }
     } catch (err: any) {
-      console.error(err);
+      console.error("Payment error:", err);
       let errorMessage = '';
-      if (err.response?.data?.error) {
-        const errData = err.response.data.error;
-        if (typeof errData === 'object') {
-          errorMessage = errData.errText || errData.message || JSON.stringify(errData);
-        } else {
-          errorMessage = errData;
-        }
-      } else if (err.response?.data) {
+
+      if (err.response?.data) {
         const responseData = err.response.data;
-        if (typeof responseData === 'object') {
-          errorMessage = responseData.error || responseData.errText || responseData.message || JSON.stringify(responseData);
-        } else {
-          errorMessage = responseData;
+
+        if (typeof responseData === 'string') {
+          if (responseData.includes('<!DOCTYPE') || responseData.includes('<html') || responseData.includes('Internal Server Error')) {
+            errorMessage = 'Помилка сервера (Cloud Function не відповідає). Переконайтеся, що бекенд задеплоєно (firebase deploy).';
+          } else {
+            errorMessage = responseData;
+          }
+        } else if (typeof responseData === 'object') {
+          const innerError = responseData.error || responseData.errText || responseData.message;
+          if (typeof innerError === 'object') {
+            errorMessage = innerError.errText || innerError.message || JSON.stringify(innerError);
+          } else if (typeof innerError === 'string') {
+            if (innerError.includes('<!DOCTYPE') || innerError.includes('<html')) {
+              errorMessage = 'Помилка виклику сервера. Перевірте налаштування та підключення бекенду.';
+            } else {
+              errorMessage = innerError;
+            }
+          } else {
+            errorMessage = JSON.stringify(responseData);
+          }
         }
+      } else if (err.message) {
+        errorMessage = err.message;
       } else {
-        errorMessage = err.message || 'Помилка мережі чи сервера';
+        errorMessage = 'Помилка мережі або зв\'язку з сервером';
       }
+
       setError(errorMessage);
     } finally {
       setLoading(false);

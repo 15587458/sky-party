@@ -44,7 +44,7 @@ import {
 import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, serverTimestamp, query, orderBy, deleteField } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firebaseUtils';
 import { getFbFirestore } from '../lib/firebase';
-import { Event, SiteConfig, Order, PrivateSettings, Chart, ChartElement } from '../types';
+import { Event, SiteConfig, Order, PrivateSettings, Chart, ChartElement, TerritoryConfig } from '../types';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
@@ -59,7 +59,8 @@ import {
   ResponsiveContainer,
   PieChart,
   Pie,
-  Cell
+  Cell,
+  Legend
 } from 'recharts';
 
 import { Link } from 'react-router-dom';
@@ -82,6 +83,20 @@ const MonobankPawIcon = () => (
   </svg>
 );
 
+const getNetQuantity = (o: Order) => Math.max(0, (o.quantity || 1) - (o.returnedCount || 0));
+const getNetPrice = (o: Order) => {
+  const returned = o.returnedCount || 0;
+  if (!returned) return o.price || 0;
+  const unitPrice = Math.floor((o.price || 0) / (o.quantity || 1));
+  const refundSum = Math.ceil(unitPrice * returned);
+  return Math.max(0, (o.price || 0) - refundSum);
+};
+const getNetPriceWithoutCommission = (o: Order, commissionPercentage: number = 0) => {
+  const netPrice = getNetPrice(o);
+  if (!netPrice || !commissionPercentage) return netPrice;
+  return Math.round(netPrice / (1 + commissionPercentage / 100));
+};
+
 export default function AdminDashboard() {
   const { rawEvents, events, charts, config, setAdmin, isInitialized, orders, privateSettings, loadChartElements } = useApp();
   const [activeTab, setActiveTab] = useState<'events' | 'config' | 'orders' | 'charts' | 'scanner' | 'stats' | 'scanner-integration'>('events');
@@ -96,6 +111,8 @@ export default function AdminDashboard() {
   const [tempPrivate, setTempPrivate] = useState<Partial<PrivateSettings>>({});
   const [isEditingPrivate, setIsEditingPrivate] = useState(false);
   const [orderSearch, setOrderSearch] = useState('');
+  const [orderEventFilter, setOrderEventFilter] = useState<string>('all');
+  const [orderStatusFilter, setOrderStatusFilter] = useState<string>('all');
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [isDbOnline, setIsDbOnline] = useState<boolean | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string>('all');
@@ -483,7 +500,7 @@ export default function AdminDashboard() {
     setTimeout(() => setMessage(null), 3000);
   };
 
-  const handleSaveChart = async (elements: ChartElement[], background?: string) => {
+  const handleSaveChart = async (elements: ChartElement[], background?: string, territory?: TerritoryConfig) => {
     try {
       const db = getFbFirestore();
       if (!db) return;
@@ -503,7 +520,7 @@ export default function AdminDashboard() {
         const chartRef = fbDoc(db, 'charts', chartId);
         
         // We MUST NOT pass elements here. 
-        const docData = {
+        const docData: any = {
           name: editingChart?.name || 'Новий зал',
           backgroundImage: background || '',
           updatedAt: serverTimestamp(),
@@ -511,26 +528,43 @@ export default function AdminDashboard() {
           elementsCount: elements.length
         };
 
-        await setDoc(chartRef, docData);
+        if (territory) {
+          docData.territory = territory;
+        }
 
-        // 1. Delete old elements (This is tricky for large charts, but necessary if we want a clean state)
-        // For simplicity and safety, we skip full delete if we can just overwrite, 
-        // but IDs might have changed. Better to delete or use a versioned collection.
-        // For now, we will just save the new elements. 
-        // TIP: To fully resolve the 1MB limit, we MUST NOT save 'elements' field in main doc.
+        await setDoc(chartRef, docData);
       } else {
-        const newChartRef = await addDoc(fbCollection(db, 'charts'), {
+        const newChartData: any = {
           name: editingChart?.name || 'Новий зал',
           backgroundImage: background || '',
           createdAt: serverTimestamp(),
           elementsCount: elements.length
-        });
+        };
+
+        if (territory) {
+          newChartData.territory = territory;
+        }
+
+        const newChartRef = await addDoc(fbCollection(db, 'charts'), newChartData);
         chartId = newChartRef.id;
       }
 
       // 2. Save elements in subcollection using batches
       const elementsRef = fbCollection(db, 'charts', chartId, 'elements');
       
+      // Clean up old elements in subcollection that were removed
+      try {
+        const { getDocs: fbGetDocs, deleteDoc: fbDeleteDoc } = await import('firebase/firestore');
+        const existingSnapshot = await fbGetDocs(elementsRef);
+        const newIds = new Set(elements.map(e => e.id));
+        const toDelete = existingSnapshot.docs.filter(d => !newIds.has(d.id));
+        for (const d of toDelete) {
+          await fbDeleteDoc(d.ref);
+        }
+      } catch (cleanupErr) {
+        console.warn('Cleanup old elements warning:', cleanupErr);
+      }
+
       // Split elements into chunks of 450 (safe limit for batch of 500, leaving some room)
       for (let i = 0; i < elements.length; i += 450) {
         const batch = writeBatch(db);
@@ -1619,170 +1653,282 @@ export default function AdminDashboard() {
           )}
 
           {activeTab === 'orders' && (
-            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
-               <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold uppercase tracking-tight">Замовлення та квитки</h2>
-                <div className="flex items-center gap-3">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
-                    <input 
-                      type="text"
-                      placeholder="Пошук (ім'я, email, ID)..."
-                      value={orderSearch}
-                      onChange={e => setOrderSearch(e.target.value)}
-                      className="h-10 bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 text-sm focus:ring-2 focus:ring-purple-500 outline-none w-64"
-                    />
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+               <div className="flex flex-col gap-4 border-b border-zinc-800 pb-4">
+                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold uppercase tracking-tight">Замовлення та квитки</h2>
+                    <p className="text-zinc-500 text-sm">Керування, пошук та фільтрація списку замовлень</p>
                   </div>
-                  <button 
-                    onClick={() => {
-                      const activeEvents = rawEvents.filter(e => e.isActive && e.hasSeatingChart);
-                      if (activeEvents.length > 0) {
-                        handleSelectAdminEvent(activeEvents[0].id!);
-                      } else if (rawEvents.length > 0) {
-                        handleSelectAdminEvent(rawEvents[0].id!);
-                      }
-                      setShowAdminMapSelector(true);
-                    }}
-                    className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-xl font-bold text-xs uppercase transition-all shadow-lg shadow-purple-500/20"
-                  >
-                    <Grid3X3 size={16} />
-                    Видати через карту
-                  </button>
-                  <button 
-                    onClick={() => handleIssueFreeTicket()}
-                    className="flex items-center gap-2 bg-white text-black px-4 py-2 rounded-xl font-bold text-xs uppercase hover:bg-zinc-200 transition-all"
-                  >
-                    <Plus size={16} />
-                    Видати квиток
-                  </button>
-                </div>
-              </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button 
+                      onClick={() => {
+                        const activeEvents = rawEvents.filter(e => e.isActive && e.hasSeatingChart);
+                        if (activeEvents.length > 0) {
+                          handleSelectAdminEvent(activeEvents[0].id!);
+                        } else if (rawEvents.length > 0) {
+                          handleSelectAdminEvent(rawEvents[0].id!);
+                        }
+                        setShowAdminMapSelector(true);
+                      }}
+                      className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-xl font-bold text-xs uppercase transition-all shadow-lg shadow-purple-500/20"
+                    >
+                      <Grid3X3 size={16} />
+                      Видати через карту
+                    </button>
+                    <button 
+                      onClick={() => handleIssueFreeTicket()}
+                      className="flex items-center gap-2 bg-white text-black px-4 py-2 rounded-xl font-bold text-xs uppercase hover:bg-zinc-200 transition-all"
+                    >
+                      <Plus size={16} />
+                      Видати квиток
+                    </button>
+                  </div>
+                 </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-[24px] overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="bg-zinc-950/50 text-[10px] font-black uppercase text-zinc-500 tracking-widest border-b border-zinc-800">
-                        <th className="px-6 py-4">ID / Дата</th>
-                        <th className="px-6 py-4">Клієнт</th>
-                        <th className="px-6 py-4">Подія</th>
-                        <th className="px-6 py-4">Тип / Ціна</th>
-                        <th className="px-6 py-4">Статус</th>
-                        <th className="px-6 py-4 flex justify-end">Дії</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-800">
-                      {(() => {
-                        let lastDateStr = '';
-                        return orders
-                          .filter(o => 
-                            (o.id || '').toLowerCase().includes(orderSearch.toLowerCase()) || 
-                            (o.name || '').toLowerCase().includes(orderSearch.toLowerCase()) ||
-                            (o.surname || '').toLowerCase().includes(orderSearch.toLowerCase()) ||
-                            (o.email || '').toLowerCase().includes(orderSearch.toLowerCase())
-                          )
-                          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-                          .map(order => {
-                            const orderDate = new Date(order.createdAt || 0);
-                            const dayStr = orderDate.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' });
-                            const showDivider = dayStr !== lastDateStr;
-                            lastDateStr = dayStr;
-                            return (
-                              <React.Fragment key={order.id}>
-                                {showDivider && (
-                                  <tr className="bg-zinc-950/70 border-y border-zinc-800/80">
-                                    <td colSpan={6} className="px-6 py-3 font-black text-[10px] text-purple-400 bg-zinc-950/30 uppercase tracking-widest">
-                                      📅 {dayStr}
-                                    </td>
-                                  </tr>
-                                )}
-                                <tr className="hover:bg-white/[0.02] transition-colors group">
-                                  <td className="px-6 py-4">
-                                    <div className="flex flex-col">
-                                      <span className="font-mono text-xs font-bold text-white">#{order.id}</span>
-                                      <span className="text-[10px] text-zinc-500 uppercase">{orderDate.toLocaleTimeString('uk-UA')}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-6 py-4">
-                                    <div className="flex flex-col">
-                                      <span className="text-sm font-bold text-white">{order.name} {order.surname}</span>
-                                      <span className="text-[10px] text-zinc-500 uppercase">{order.email}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-6 py-4">
-                                     <div className="flex flex-col">
-                                       <span className="text-xs font-bold text-white truncate max-w-[150px]">
-                                         {rawEvents.find(e => e.id === order.eventId)?.title || order.eventId}
-                                       </span>
-                                     </div>
-                                  </td>
-                                  <td className="px-6 py-4">
-                                    <div className="flex flex-col">
-                                       <span className="text-[10px] font-black text-white px-2 py-0.5 rounded bg-zinc-800 w-fit uppercase mb-1">
-                                         {order.ticketType}
-                                       </span>
-                                       <span className="text-sm font-black text-white">{order.price} грн</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-6 py-4">
-                                    <span className={cn(
-                                      "px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest",
-                                      order.status === 'paid' ? "bg-green-500/10 text-green-500" : 
-                                      order.status === 'used' ? "bg-blue-500/10 text-blue-500" :
-                                      order.status === 'cancelled' ? "bg-red-500/10 text-red-500" : "bg-yellow-500/10 text-yellow-500"
-                                    )}>
-                                      {order.status === 'paid' ? 'сплачено' : 
-                                       order.status === 'used' ? 'проскановано' :
-                                       order.status === 'cancelled' ? 'скасовано' : 'очікує'}
-                                    </span>
-                                  </td>
-                                  <td className="px-6 py-4">
-                                     <div className="flex justify-end gap-2 text-zinc-500">
-                                        {order.status === 'pending' && (
-                                          <button 
-                                            onClick={() => updateOrderStatus(order.id, 'paid')}
-                                            className="p-1.5 hover:bg-white/10 text-green-500 rounded-lg transition-all"
-                                            title="Підтвердити"
-                                          >
-                                            <CheckCircle2 size={14} />
-                                          </button>
-                                        )}
-                                        <button 
-                                          onClick={() => setViewingOrder(order)}
-                                          className="p-1.5 hover:bg-white/10 rounded-lg transition-all hover:text-white"
-                                          title="Деталі"
-                                        >
-                                           <Eye size={14} />
-                                        </button>
-                                        <button 
-                                          onClick={async () => {
-                                            if(confirm('Видалити замовлення?')) {
-                                              try {
-                                                await deleteDoc(doc(db!, 'orders', order.id));
-                                                showMessage('success', 'Замовлення видалено');
-                                              } catch(err) {
-                                                showMessage('error', 'Помилка видалення');
-                                              }
-                                            }
-                                          }}
-                                          className="p-1.5 hover:bg-white/10 rounded-lg transition-all text-red-500"
-                                          title="Видалити"
-                                        >
-                                           <Trash2 size={14} />
-                                        </button>
-                                     </div>
-                                  </td>
-                                </tr>
-                              </React.Fragment>
-                            );
-                          });
-                      })()}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                 {/* Filters Row */}
+                 <div className="flex flex-col md:flex-row gap-3">
+                    <div className="relative flex-1 md:max-w-xs">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                      <input 
+                        type="text"
+                        placeholder="Пошук замовника чи ID..."
+                        value={orderSearch}
+                        onChange={e => setOrderSearch(e.target.value)}
+                        className="w-full h-10 bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                      />
+                    </div>
+
+                    <select
+                      value={orderEventFilter}
+                      onChange={e => setOrderEventFilter(e.target.value)}
+                      className="h-10 bg-zinc-900 border border-zinc-800 rounded-xl px-4 text-sm focus:ring-2 focus:ring-purple-500 outline-none md:w-56"
+                    >
+                      <option value="all">Усі події</option>
+                      {rawEvents.map(event => (
+                        <option key={event.id} value={event.id}>{event.title}</option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={orderStatusFilter}
+                      onChange={e => setOrderStatusFilter(e.target.value)}
+                      className="h-10 bg-zinc-900 border border-zinc-800 rounded-xl px-4 text-sm focus:ring-2 focus:ring-purple-500 outline-none md:w-56"
+                    >
+                      <option value="all">Усі статуси</option>
+                      <option value="successful">🟢 Сплачено / Проскановано</option>
+                      <option value="pending">🟡 Очікує</option>
+                      <option value="cancelled">🔴 Скасовано</option>
+                    </select>
+                 </div>
+               </div>
+
+               {(() => {
+                 // Filter orders locally
+                 const filteredOrders = orders
+                   .filter(o => {
+                     const matchesSearch = 
+                       (o.id || '').toLowerCase().includes(orderSearch.toLowerCase()) || 
+                       (o.name || '').toLowerCase().includes(orderSearch.toLowerCase()) ||
+                       (o.surname || '').toLowerCase().includes(orderSearch.toLowerCase()) ||
+                       (o.email || '').toLowerCase().includes(orderSearch.toLowerCase());
+                     
+                     const matchesEvent = orderEventFilter === 'all' || o.eventId === orderEventFilter;
+                     
+                     let matchesStatus = true;
+                     if (orderStatusFilter === 'successful') {
+                       matchesStatus = o.status === 'paid' || o.status === 'used';
+                     } else if (orderStatusFilter === 'pending') {
+                       matchesStatus = o.status === 'pending';
+                     } else if (orderStatusFilter === 'cancelled') {
+                       matchesStatus = o.status === 'cancelled';
+                     }
+                     
+                     return matchesSearch && matchesEvent && matchesStatus;
+                   });
+
+                 const totalFilteredOrdersCount = filteredOrders.length;
+                 const totalFilteredTicketsCount = filteredOrders.reduce((sum, o) => sum + getNetQuantity(o), 0);
+                 const totalFilteredRevenue = filteredOrders.reduce((sum, o) => sum + getNetPrice(o), 0);
+                 const totalFilteredRevenueWithoutCommission = filteredOrders.reduce((sum, o) => sum + getNetPriceWithoutCommission(o, config?.commissionPercentage || 0), 0);
+
+                 return (
+                   <div className="space-y-4">
+                     {/* Mini overview of filtered list */}
+                     <div className="grid grid-cols-3 gap-4 bg-zinc-900/50 border border-zinc-800 p-4 rounded-2xl">
+                       <div className="text-center md:text-left md:px-4">
+                         <p className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Замовлень у списку</p>
+                         <p className="text-lg md:text-xl font-black text-white mt-1">{totalFilteredOrdersCount} шт.</p>
+                       </div>
+                       <div className="text-center md:text-left md:px-4 border-x border-zinc-800">
+                         <p className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Усього квитків (Net)</p>
+                         <p className="text-lg md:text-xl font-black text-purple-400 mt-1">{totalFilteredTicketsCount} квит.</p>
+                       </div>
+                       <div className="text-center md:text-left md:px-4">
+                         <p className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Сума (Net)</p>
+                         <div className="mt-1 space-y-0.5">
+                           <p className="text-sm md:text-base font-black text-green-400">
+                             {totalFilteredRevenue} грн <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">(з ком.)</span>
+                           </p>
+                           <p className="text-xs md:text-sm font-black text-emerald-500">
+                             {totalFilteredRevenueWithoutCommission} грн <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">(без ком.)</span>
+                           </p>
+                         </div>
+                       </div>
+                     </div>
+
+                     <div className="bg-zinc-900 border border-zinc-800 rounded-[24px] overflow-hidden">
+                       <div className="overflow-x-auto">
+                         <table className="w-full text-left">
+                           <thead>
+                             <tr className="bg-zinc-950/50 text-[10px] font-black uppercase text-zinc-500 tracking-widest border-b border-zinc-800">
+                               <th className="px-6 py-4">ID / Дата</th>
+                               <th className="px-6 py-4">Клієнт</th>
+                               <th className="px-6 py-4">Подія</th>
+                               <th className="px-6 py-4">Тип</th>
+                               <th className="px-6 py-4">Кількість</th>
+                               <th className="px-6 py-4">Ціна (Net)</th>
+                               <th className="px-6 py-4">Статус</th>
+                               <th className="px-6 py-4 flex justify-end">Дії</th>
+                             </tr>
+                           </thead>
+                           <tbody className="divide-y divide-zinc-800">
+                             {(() => {
+                               let lastDateStr = '';
+                               return filteredOrders
+                                 .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+                                 .map(order => {
+                                   const orderDate = new Date(order.createdAt || 0);
+                                   const dayStr = orderDate.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' });
+                                   const showDivider = dayStr !== lastDateStr;
+                                   lastDateStr = dayStr;
+                                   const netQty = getNetQuantity(order);
+                                   const netPrice = getNetPrice(order);
+
+                                   return (
+                                     <React.Fragment key={order.id}>
+                                       {showDivider && (
+                                         <tr className="bg-zinc-950/70 border-y border-zinc-800/80">
+                                           <td colSpan={8} className="px-6 py-3 font-black text-[10px] text-purple-400 bg-zinc-950/30 uppercase tracking-widest">
+                                             📅 {dayStr}
+                                           </td>
+                                         </tr>
+                                       )}
+                                       <tr className="hover:bg-white/[0.02] transition-colors group">
+                                         <td className="px-6 py-4">
+                                           <div className="flex flex-col">
+                                             <span className="font-mono text-xs font-bold text-white">#{order.id}</span>
+                                             <span className="text-[10px] text-zinc-500 uppercase">{orderDate.toLocaleTimeString('uk-UA')}</span>
+                                           </div>
+                                         </td>
+                                         <td className="px-6 py-4">
+                                           <div className="flex flex-col">
+                                             <span className="text-sm font-bold text-white">{order.name} {order.surname}</span>
+                                             <span className="text-[10px] text-zinc-500 uppercase">{order.email}</span>
+                                           </div>
+                                         </td>
+                                         <td className="px-6 py-4">
+                                            <div className="flex flex-col">
+                                              <span className="text-xs font-bold text-white truncate max-w-[150px]">
+                                                {rawEvents.find(e => e.id === order.eventId)?.title || order.eventId}
+                                              </span>
+                                            </div>
+                                         </td>
+                                         <td className="px-6 py-4">
+                                            <span className="text-[10px] font-black text-white px-2 py-0.5 rounded bg-zinc-800 w-fit uppercase">
+                                              {order.ticketType}
+                                            </span>
+                                         </td>
+                                         <td className="px-6 py-4 font-bold text-white text-xs">
+                                            {netQty !== order.quantity ? (
+                                              <div className="flex flex-col">
+                                                <span className="text-red-400">{netQty} шт.</span>
+                                                <span className="text-[9px] text-zinc-500 line-through">з {order.quantity} шт.</span>
+                                              </div>
+                                            ) : (
+                                              <span>{order.quantity || 1} шт.</span>
+                                            )}
+                                         </td>
+                                         <td className="px-6 py-4 text-xs">
+                                            <div className="flex flex-col gap-0.5">
+                                               {netPrice !== order.price ? (
+                                              <div className="flex flex-col">
+                                                <span className="font-black text-red-400">{netPrice} грн <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">(з ком.)</span></span>
+                                                <span className="text-[9px] text-zinc-500 line-through">з {order.price} грн</span>
+                                              </div>
+                                            ) : (
+                                              <span>{order.price} грн <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">(з ком.)</span></span>
+                                            )}
+                                            {netPrice > 0 && config?.commissionPercentage && config.commissionPercentage > 0 ? (
+                                              <span className="text-[10px] text-emerald-400 font-medium mt-0.5">
+                                                {getNetPriceWithoutCommission(order, config.commissionPercentage)} грн <span className="text-[9px] text-zinc-650 font-bold uppercase tracking-wider">(без)</span>
+                                              </span>
+                                            ) : null}
+                                            </div>
+                                         </td>
+                                         <td className="px-6 py-4">
+                                           <span className={cn(
+                                             "px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest",
+                                             order.status === 'paid' ? "bg-green-500/10 text-green-500" : 
+                                             order.status === 'used' ? "bg-blue-500/10 text-blue-500" :
+                                             order.status === 'cancelled' ? "bg-red-500/10 text-red-500" : "bg-yellow-500/10 text-yellow-500"
+                                           )}>
+                                             {order.status === 'paid' ? 'сплачено' : 
+                                              order.status === 'used' ? 'проскановано' :
+                                              order.status === 'cancelled' ? 'скасовано' : 'очікує'}
+                                           </span>
+                                         </td>
+                                         <td className="px-6 py-4">
+                                            <div className="flex justify-end gap-2 text-zinc-500">
+                                               {order.status === 'pending' && (
+                                                 <button 
+                                                   onClick={() => updateOrderStatus(order.id, 'paid')}
+                                                   className="p-1.5 hover:bg-white/10 text-green-500 rounded-lg transition-all"
+                                                   title="Підтвердити"
+                                                 >
+                                                   <CheckCircle2 size={14} />
+                                                 </button>
+                                               )}
+                                               <button 
+                                                 onClick={() => setViewingOrder(order)}
+                                                 className="p-1.5 hover:bg-white/10 rounded-lg transition-all hover:text-white"
+                                                 title="Деталі"
+                                               >
+                                                  <Eye size={14} />
+                                               </button>
+                                               <button 
+                                                 onClick={async () => {
+                                                   if(confirm('Видалити замовлення?')) {
+                                                     try {
+                                                       await deleteDoc(doc(db!, 'orders', order.id));
+                                                       showMessage('success', 'Замовлення видалено');
+                                                     } catch(err) {
+                                                       showMessage('error', 'Помилка видалення');
+                                                     }
+                                                   }
+                                                 }}
+                                                 className="p-1.5 hover:bg-white/10 rounded-lg transition-all text-red-500"
+                                                 title="Видалити"
+                                               >
+                                                  <Trash2 size={14} />
+                                               </button>
+                                            </div>
+                                         </td>
+                                       </tr>
+                                     </React.Fragment>
+                                   );
+                                 });
+                             })()}
+                           </tbody>
+                         </table>
+                       </div>
+                     </div>
+                   </div>
+                 );
+               })()}
             </div>
           )}
+
 
           {activeTab === 'charts' && (
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
@@ -1843,15 +1989,15 @@ export default function AdminDashboard() {
             const currentEvent = rawEvents.find(e => e.id === integrationEventId);
             const eventOrders = orders.filter(o => o.eventId === integrationEventId && (o.status === 'paid' || o.status === 'used'));
             
-            const totalTicketsSold = eventOrders.reduce((sum, o) => sum + (o.quantity || 1), 0);
+            const totalTicketsSold = eventOrders.reduce((sum, o) => sum + getNetQuantity(o), 0);
             const totalTicketsScanned = eventOrders.reduce((sum, o) => sum + (o.scannedCount || 0), 0);
             const attendanceRate = totalTicketsSold > 0 ? Math.round((totalTicketsScanned / totalTicketsSold) * 100) : 0;
 
-            const vipTicketsSold = eventOrders.filter(o => o.ticketType === 'vip').reduce((sum, o) => sum + (o.quantity || 1), 0);
+            const vipTicketsSold = eventOrders.filter(o => o.ticketType === 'vip').reduce((sum, o) => sum + getNetQuantity(o), 0);
             const vipTicketsScanned = eventOrders.filter(o => o.ticketType === 'vip').reduce((sum, o) => sum + (o.scannedCount || 0), 0);
 
-            const standardTicketsSold = eventOrders.filter(o => o.ticketType === 'standard' || o.ticketType === 'free').reduce((sum, o) => sum + (o.quantity || 1), 0);
-            const standardTicketsScanned = eventOrders.filter(o => o.ticketType === 'standard' || o.ticketType === 'free').reduce((sum, o) => sum + (o.scannedCount || 0), 0);
+            const standardTicketsSold = eventOrders.filter(o => o.ticketType !== 'vip').reduce((sum, o) => sum + getNetQuantity(o), 0);
+            const standardTicketsScanned = eventOrders.filter(o => o.ticketType !== 'vip').reduce((sum, o) => sum + (o.scannedCount || 0), 0);
 
             // Extract individual scan logs
             const scanLogs: any[] = [];
@@ -2196,8 +2342,19 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {activeTab === 'stats' && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+          {activeTab === 'stats' && (() => {
+            const revenueWithComm = orders
+              .filter(o => o.status === 'paid' || o.status === 'used')
+              .filter(o => selectedEventId === 'all' || o.eventId === selectedEventId)
+              .reduce((acc, o) => acc + getNetPrice(o), 0);
+
+            const revenueWithoutComm = orders
+              .filter(o => o.status === 'paid' || o.status === 'used')
+              .filter(o => selectedEventId === 'all' || o.eventId === selectedEventId)
+              .reduce((acc, o) => acc + getNetPriceWithoutCommission(o, config?.commissionPercentage || 0), 0);
+
+            return (
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <h2 className="text-2xl font-bold uppercase tracking-tight">Статистика та Звіти</h2>
@@ -2229,8 +2386,8 @@ export default function AdminDashboard() {
                           `${o.name} ${o.surname}`,
                           o.email,
                           o.ticketType,
-                          o.quantity,
-                          o.price,
+                          getNetQuantity(o),
+                          getNetPrice(o),
                           new Date(o.createdAt).toLocaleString()
                         ]);
                         
@@ -2256,10 +2413,26 @@ export default function AdminDashboard() {
               {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
-                  { label: 'Загальний дохід', value: `${orders.filter(o => o.status === 'paid' || o.status === 'used').filter(o => selectedEventId === 'all' || o.eventId === selectedEventId).reduce((acc, o) => acc + (o.price || 0), 0)} грн`, icon: DollarSign, color: 'text-green-500', bg: 'bg-green-500/10' },
-                  { label: 'Продано квитків', value: orders.filter(o => o.status === 'paid' || o.status === 'used').filter(o => selectedEventId === 'all' || o.eventId === selectedEventId).reduce((acc, o) => acc + (o.quantity || 1), 0), icon: Ticket, color: 'text-purple-500', bg: 'bg-purple-500/10' },
-                  { label: 'VIP квитки', value: orders.filter(o => (o.status === 'paid' || o.status === 'used') && o.ticketType === 'vip').filter(o => selectedEventId === 'all' || o.eventId === selectedEventId).reduce((acc, o) => acc + (o.quantity || 1), 0), icon: Shield, color: 'text-yellow-500', bg: 'bg-yellow-500/10' },
-                  { label: 'Активні події', value: rawEvents.filter(e => e.isActive).length, icon: Calendar, color: 'text-blue-500', bg: 'bg-blue-500/10' }
+                  { 
+                    label: 'Загальний дохід', 
+                    value: (
+                      <div className="space-y-1">
+                        <p className="text-lg md:text-xl font-black text-green-400">
+                          {revenueWithComm} грн <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">(з ком.)</span>
+                        </p>
+                        <p className="text-sm font-black text-emerald-500">
+                          {revenueWithoutComm} грн <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">(без ком.)</span>
+                        </p>
+                      </div>
+                    ), 
+                    icon: DollarSign, 
+                    color: 'text-green-500', 
+                    bg: 'bg-green-500/10',
+                    customRender: true
+                  },
+                  { label: 'Продано квитків', value: `${orders.filter(o => o.status === 'paid' || o.status === 'used').filter(o => selectedEventId === 'all' || o.eventId === selectedEventId).reduce((acc, o) => acc + getNetQuantity(o), 0)} шт.`, icon: Ticket, color: 'text-purple-500', bg: 'bg-purple-500/10' },
+                  { label: 'VIP квитки', value: `${orders.filter(o => (o.status === 'paid' || o.status === 'used') && o.ticketType === 'vip').filter(o => selectedEventId === 'all' || o.eventId === selectedEventId).reduce((acc, o) => acc + getNetQuantity(o), 0)} шт.`, icon: Shield, color: 'text-yellow-500', bg: 'bg-yellow-500/10' },
+                  { label: 'Активні події', value: `${rawEvents.filter(e => e.isActive).length}`, icon: Calendar, color: 'text-blue-500', bg: 'bg-blue-500/10' }
                 ].map((stat, i) => (
                   <div key={i} className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
                     <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", stat.bg)}>
@@ -2267,7 +2440,11 @@ export default function AdminDashboard() {
                     </div>
                     <div>
                       <p className="text-[10px] font-black uppercase text-zinc-500 tracking-widest">{stat.label}</p>
-                      <p className="text-2xl font-black text-white">{stat.value}</p>
+                      {'customRender' in stat && stat.customRender ? (
+                        <div className="mt-2">{stat.value}</div>
+                      ) : (
+                        <p className="text-2xl font-black text-white mt-1">{stat.value}</p>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -2288,10 +2465,14 @@ export default function AdminDashboard() {
                         const filtered = orders.filter(o => (o.status === 'paid' || o.status === 'used') && (selectedEventId === 'all' || o.eventId === selectedEventId));
                         // Group by day for the last 7 days or by event if 'all'
                         if (selectedEventId === 'all') {
-                          return rawEvents.map(e => ({
-                            name: e.title.substring(0, 10) + '...',
-                            revenue: orders.filter(o => o.eventId === e.id && (o.status === 'paid' || o.status === 'used')).reduce((acc, o) => acc + (o.price || 0), 0)
-                          }));
+                          return rawEvents.map(e => {
+                            const evOrders = orders.filter(o => o.eventId === e.id && (o.status === 'paid' || o.status === 'used'));
+                            return {
+                              name: e.title.substring(0, 10) + '...',
+                              'З комісією': evOrders.reduce((acc, o) => acc + getNetPrice(o), 0),
+                              'Без комісії': evOrders.reduce((acc, o) => acc + getNetPriceWithoutCommission(o, config?.commissionPercentage || 0), 0)
+                            };
+                          });
                         } else {
                           // Last 7 days
                           const days = Array.from({length: 7}, (_, i) => {
@@ -2300,10 +2481,14 @@ export default function AdminDashboard() {
                             return d.toISOString().split('T')[0];
                           }).reverse();
                           
-                          return days.map(day => ({
-                            name: day.split('-').slice(1).reverse().join('.'),
-                            revenue: filtered.filter(o => new Date(o.createdAt).toISOString().split('T')[0] === day).reduce((acc, o) => acc + (o.price || 0), 0)
-                          }));
+                          return days.map(day => {
+                            const dayOrders = filtered.filter(o => new Date(o.createdAt).toISOString().split('T')[0] === day);
+                            return {
+                              name: day.split('-').slice(1).reverse().join('.'),
+                              'З комісією': dayOrders.reduce((acc, o) => acc + getNetPrice(o), 0),
+                              'Без комісії': dayOrders.reduce((acc, o) => acc + getNetPriceWithoutCommission(o, config?.commissionPercentage || 0), 0)
+                            };
+                          });
                         }
                       })()}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
@@ -2325,11 +2510,20 @@ export default function AdminDashboard() {
                           contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', fontSize: '12px' }}
                           cursor={{ fill: 'rgba(255,255,255,0.05)' }}
                         />
+                        <Legend 
+                          wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }}
+                        />
                         <Bar 
-                          dataKey="revenue" 
+                          dataKey="З комісією" 
                           fill="#a855f7" 
                           radius={[4, 4, 0, 0]} 
-                          barSize={32}
+                          barSize={16}
+                        />
+                        <Bar 
+                          dataKey="Без комісії" 
+                          fill="#10b981" 
+                          radius={[4, 4, 0, 0]} 
+                          barSize={16}
                         />
                       </BarChart>
                     </ResponsiveContainer>
@@ -2348,9 +2542,9 @@ export default function AdminDashboard() {
                         <Pie
                           data={(() => {
                             const filtered = orders.filter(o => (o.status === 'paid' || o.status === 'used') && (selectedEventId === 'all' || o.eventId === selectedEventId));
-                            const standard = filtered.filter(o => o.ticketType === 'standard').reduce((acc, o) => acc + (o.quantity || 1), 0);
-                            const vip = filtered.filter(o => o.ticketType === 'vip').reduce((acc, o) => acc + (o.quantity || 1), 0);
-                            const free = filtered.filter(o => o.ticketType === 'free').reduce((acc, o) => acc + (o.quantity || 1), 0);
+                            const standard = filtered.filter(o => o.ticketType === 'standard').reduce((acc, o) => acc + getNetQuantity(o), 0);
+                            const vip = filtered.filter(o => o.ticketType === 'vip').reduce((acc, o) => acc + getNetQuantity(o), 0);
+                            const free = filtered.filter(o => o.ticketType === 'free').reduce((acc, o) => acc + getNetQuantity(o), 0);
                             return [
                               { name: 'Standard', value: standard, color: '#a855f7' },
                               { name: 'VIP', value: vip, color: '#eab308' },
@@ -2366,9 +2560,9 @@ export default function AdminDashboard() {
                         >
                           {(() => {
                             const filtered = orders.filter(o => (o.status === 'paid' || o.status === 'used') && (selectedEventId === 'all' || o.eventId === selectedEventId));
-                            const standard = filtered.filter(o => o.ticketType === 'standard').reduce((acc, o) => acc + (o.quantity || 1), 0);
-                            const vip = filtered.filter(o => o.ticketType === 'vip').reduce((acc, o) => acc + (o.quantity || 1), 0);
-                            const free = filtered.filter(o => o.ticketType === 'free').reduce((acc, o) => acc + (o.quantity || 1), 0);
+                            const standard = filtered.filter(o => o.ticketType === 'standard').reduce((acc, o) => acc + getNetQuantity(o), 0);
+                            const vip = filtered.filter(o => o.ticketType === 'vip').reduce((acc, o) => acc + getNetQuantity(o), 0);
+                            const free = filtered.filter(o => o.ticketType === 'free').reduce((acc, o) => acc + getNetQuantity(o), 0);
                             return [
                               { name: 'Standard', value: standard, color: '#a855f7' },
                               { name: 'VIP', value: vip, color: '#eab308' },
@@ -2387,9 +2581,9 @@ export default function AdminDashboard() {
                   <div className="space-y-2">
                     {(() => {
                       const filtered = orders.filter(o => (o.status === 'paid' || o.status === 'used') && (selectedEventId === 'all' || o.eventId === selectedEventId));
-                      const standard = filtered.filter(o => o.ticketType === 'standard').reduce((acc, o) => acc + (o.quantity || 1), 0);
-                      const vip = filtered.filter(o => o.ticketType === 'vip').reduce((acc, o) => acc + (o.quantity || 1), 0);
-                      const free = filtered.filter(o => o.ticketType === 'free').reduce((acc, o) => acc + (o.quantity || 1), 0);
+                      const standard = filtered.filter(o => o.ticketType === 'standard').reduce((acc, o) => acc + getNetQuantity(o), 0);
+                      const vip = filtered.filter(o => o.ticketType === 'vip').reduce((acc, o) => acc + getNetQuantity(o), 0);
+                      const free = filtered.filter(o => o.ticketType === 'free').reduce((acc, o) => acc + getNetQuantity(o), 0);
                       return [
                         { name: 'Standard', value: standard, color: 'bg-purple-500' },
                         { name: 'VIP', value: vip, color: 'bg-yellow-500' },
@@ -2408,7 +2602,8 @@ export default function AdminDashboard() {
                 </div>
               </div>
             </div>
-          )}
+          );
+        })()}
 
               </motion.div>
             </AnimatePresence>
@@ -3728,7 +3923,8 @@ export default function AdminDashboard() {
           <SeatingChartEditor 
             initialElements={editingChart.elements ? (typeof editingChart.elements === 'string' ? JSON.parse(editingChart.elements || '[]') : editingChart.elements) : []}
             initialBackground={editingChart.backgroundImage}
-            onSave={(elements, bg) => handleSaveChart(elements, bg)}
+            initialTerritory={editingChart.territory}
+            onSave={(elements, bg, territory) => handleSaveChart(elements, bg, territory)}
             onCancel={() => setEditingChart(null)}
           />
         </div>
@@ -3815,6 +4011,7 @@ export default function AdminDashboard() {
                     <SeatingChartCanvas 
                       elements={adminChartElements}
                       backgroundImage={charts.find(c => c.id === rawEvents.find(e => e.id === adminSelectedEventId)?.chartId)?.backgroundImage}
+                      territory={charts.find(c => c.id === rawEvents.find(e => e.id === adminSelectedEventId)?.chartId)?.territory}
                       occupiedIds={orders
                         .filter(o => o.eventId === adminSelectedEventId && (o.status === 'paid' || o.status === 'pending') && o.elementId)
                         .map(o => o.elementId!)}
@@ -3823,8 +4020,8 @@ export default function AdminDashboard() {
                         const el = adminChartElements.find(e => e.id === id);
                         setAdminSelectedElement(el || null);
                       }}
-                      width={1000}
-                      height={800}
+                      width={charts.find(c => c.id === rawEvents.find(e => e.id === adminSelectedEventId)?.chartId)?.territory?.width || 1200}
+                      height={charts.find(c => c.id === rawEvents.find(e => e.id === adminSelectedEventId)?.chartId)?.territory?.height || 800}
                       scale={adminMapScale}
                       onScaleChange={setAdminMapScale}
                       isAdmin={false} // Click-to-select mode, not edit-drag mode

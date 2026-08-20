@@ -3,6 +3,7 @@ import { collection, onSnapshot, query, orderBy, doc, getDoc } from 'firebase/fi
 import { getFbFirestore, getFbAuth } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firebaseUtils';
 import { Event, SiteConfig, Order, PrivateSettings, Chart, ChartElement } from '../types';
+import { ZOSYNA_CHART_ID, ZOSYNA_CHART_NAME, ZOSYNA_ELEMENTS, ZOSYNA_PRESET_CHART } from '../data/zosynaPreset';
 
 interface AppContextType {
   events: Event[];
@@ -49,37 +50,13 @@ const MOCK_EVENTS: Event[] = [
     imageUrl: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&q=80',
     ticketLink: '#',
     isActive: true,
-    chartId: 'mock-chart-1',
-    hasSeatingChart: true,
     createdAt: Date.now()
   }
 ];
 
-const MOCK_CHARTS: Chart[] = [
-  {
-    id: 'mock-chart-1',
-    name: 'SKY GARDEN Seating Chart',
-    backgroundImage: '',
-    elementsCount: 6,
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  }
-];
-
-const MOCK_CHART_ELEMENTS: Record<string, ChartElement[]> = {
-  'mock-chart-1': [
-    { id: 'seat-1', type: 'seat', x: 200, y: 150, label: 'Стіл 1, Місце A', priceType: 'standard', parentId: '' },
-    { id: 'seat-2', type: 'seat', x: 200, y: 220, label: 'Стіл 1, Місце B', priceType: 'standard', parentId: '' },
-    { id: 'seat-3', type: 'seat', x: 400, y: 150, label: 'Стіл 2, Місце A', priceType: 'standard', parentId: '' },
-    { id: 'seat-4', type: 'seat', x: 400, y: 220, label: 'Стіл 2, Місце B', priceType: 'standard', parentId: '' },
-    { id: 'seat-5', type: 'seat', x: 600, y: 150, label: 'VIP Стіл 3, Місце A', priceType: 'vip', parentId: '' },
-    { id: 'seat-6', type: 'seat', x: 600, y: 220, label: 'VIP Стіл 3, Місце B', priceType: 'vip', parentId: '' },
-  ]
-};
-
 export function AppProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<Event[]>([]);
-  const [charts, setCharts] = useState<Chart[]>([]);
+  const [charts, setCharts] = useState<Chart[]>([ZOSYNA_PRESET_CHART]);
   const [config, setConfig] = useState<SiteConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setAdminState] = useState(() => {
@@ -101,17 +78,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const firestore = getFbFirestore();
 
   const loadChartElements = useCallback(async (chartId: string) => {
-    if (chartId === 'mock-chart-1' || chartId.startsWith('mock-')) {
-      return MOCK_CHART_ELEMENTS['mock-chart-1'] || [];
+    if (chartId === ZOSYNA_CHART_ID || chartId === 'zosyna' || chartId.toLowerCase() === 'зосина') {
+      if (!firestore) return ZOSYNA_ELEMENTS;
+      try {
+        const { getDocs, collection: fbCollection } = await import('firebase/firestore');
+        const snapshot = await getDocs(fbCollection(firestore, 'charts', chartId, 'elements'));
+        if (snapshot.docs.length > 0) {
+          return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChartElement[];
+        }
+        return ZOSYNA_ELEMENTS;
+      } catch (err) {
+        return ZOSYNA_ELEMENTS;
+      }
     }
+
     if (!firestore) return [];
     try {
       const { getDocs, collection: fbCollection } = await import('firebase/firestore');
       const snapshot = await getDocs(fbCollection(firestore, 'charts', chartId, 'elements'));
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChartElement[];
+      if (snapshot.docs.length > 0) {
+        return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChartElement[];
+      }
+      return [];
     } catch (err) {
       console.error('Error loading chart elements:', err);
-      return MOCK_CHART_ELEMENTS['mock-chart-1'] || [];
+      return [];
     }
   }, [firestore]);
 
@@ -151,8 +142,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           console.warn('Firebase not initialized. Using mock data.');
           setEvents(MOCK_EVENTS);
           setConfig(DEFAULT_CONFIG);
-          setLoading(false);
-          setIsInitialized(true);
           return;
         }
         
@@ -176,18 +165,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
             };
           }) as Event[];
           
-          if (eventsData.length === 0) {
-            console.log("No events from firestore, using MOCK_EVENTS.");
-            setEvents(MOCK_EVENTS);
-          } else {
-            setEvents(eventsData);
-          }
+          setEvents(eventsData);
           setLoading(false);
           setIsInitialized(true);
         }, (err) => {
           handleFirestoreError(err, OperationType.LIST, 'events');
-          console.warn("Firestore error for events. Falling back to MOCK_EVENTS.");
-          setEvents(MOCK_EVENTS);
           setLoading(false);
           setIsInitialized(true);
         });
@@ -199,28 +181,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
             id: doc.id,
             ...doc.data()
           })) as Chart[];
-          if (chartsData.length === 0) {
-            setCharts(MOCK_CHARTS);
+          
+          const hasZosyna = chartsData.some(c => c.id === ZOSYNA_CHART_ID || c.name?.toLowerCase().includes('зосина') || c.name?.toLowerCase().includes('zosyna'));
+          if (!hasZosyna) {
+            setCharts([ZOSYNA_PRESET_CHART, ...chartsData]);
           } else {
             setCharts(chartsData);
           }
         }, (err) => {
           handleFirestoreError(err, OperationType.LIST, 'charts');
-          console.warn("Firestore error for charts. Falling back to MOCK_CHARTS.");
-          setCharts(MOCK_CHARTS);
+          setCharts([ZOSYNA_PRESET_CHART]);
         });
 
         // Listen to config
         unsubscribeConfig = onSnapshot(doc(db, 'config', 'settings'), (snapshot) => {
           if (snapshot.exists()) {
             setConfig(snapshot.data() as SiteConfig);
-          } else {
-            setConfig(DEFAULT_CONFIG);
           }
         }, (err) => {
           handleFirestoreError(err, OperationType.GET, 'config/settings');
-          console.warn("Firestore error for config/settings. Falling back to DEFAULT_CONFIG.");
-          setConfig(DEFAULT_CONFIG);
         });
 
         // Listen to orders
@@ -234,23 +213,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             return { id: doc.id, ...data, createdAt } as Order;
           });
           setOrders(ordersData);
-        }, (err) => {
-          console.error("Firestore orders snapshot error:", err);
-          handleFirestoreError(err, OperationType.LIST, 'orders');
-          setOrders([]);
         });
 
         // Listen to private settings
         unsubscribePrivate = onSnapshot(doc(db, 'settings', 'private'), (snapshot) => {
           if (snapshot.exists()) {
             setPrivateSettings(snapshot.data() as PrivateSettings);
-          } else {
-            setPrivateSettings({});
           }
-        }, (err) => {
-          console.error("Firestore private settings snapshot error:", err);
-          handleFirestoreError(err, OperationType.GET, 'settings/private');
-          setPrivateSettings({});
         });
 
       } catch (err) {
@@ -258,21 +227,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    const safetyTimeoutId = setTimeout(() => {
-      setIsInitialized((initialized) => {
-        if (!initialized) {
-          console.warn("Firebase initialization timed out after 5s. Forcing UI render.");
-          setLoading(false);
-          return true;
-        }
-        return initialized;
-      });
-    }, 5000);
-
     init();
 
     return () => {
-      clearTimeout(safetyTimeoutId);
       if (unsubscribeEvents) unsubscribeEvents();
       if (unsubscribeCharts) unsubscribeCharts();
       if (unsubscribeConfig) unsubscribeConfig();

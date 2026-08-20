@@ -6,7 +6,7 @@ export default function Navbar() {
   const { config } = useApp();
 
   return (
-    <nav className="h-16 px-6 lg:px-12 border-b border-white/10 bg-bg-dark/80 backdrop-blur-xl sticky top-0 z-50 flex items-center justify-between">
+    <nav className="h-16 px-4 sm:px-6 lg:px-12 border-b border-white/10 bg-bg-dark/80 backdrop-blur-xl sticky top-0 z-50 flex items-center justify-between">
       <Link to="/" className="flex items-center gap-3.5 group">
         {config?.logoUrl ? (
           <img src={config.logoUrl} alt="Logo" className="h-10 lg:h-12 w-auto object-contain transition-transform group-hover:scale-105" />
@@ -35,7 +35,7 @@ export default function Navbar() {
         </span>
       </Link>
       
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 sm:gap-4">
         {config?.instagramUrl && (
           <a 
             href={config.instagramUrl} 
@@ -44,7 +44,7 @@ export default function Navbar() {
             className="p-2 rounded-full border border-white/10 hover:bg-white/5 transition-all text-white/50 hover:text-white"
             title="Instagram"
           >
-            <Instagram size={20} />
+            <Instagram size={18} />
           </a>
         )}
       </div>
