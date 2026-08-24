@@ -31,6 +31,124 @@ const db = initializeFirestore(fbApp, {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Centralized Robust SMTP Transporter Helper
+function createSmtpTransporter(user?: string, pass?: string, host?: string, port?: number | string) {
+  const cleanUser = String(user || '').trim();
+  const cleanPass = String(pass || '').replace(/\s+/g, ''); // Remove spaces commonly copied from Google App Passwords
+  const userLower = cleanUser.toLowerCase();
+
+  let smtpHost = host ? String(host).trim() : '';
+  let smtpPort = port ? Number(port) : 465;
+
+  const isGmail = userLower.endsWith('@gmail.com');
+  const isUkrNet = userLower.endsWith('@ukr.net');
+  const isYahoo = userLower.endsWith('@yahoo.com');
+  const isOutlook = userLower.endsWith('@outlook.com') || userLower.endsWith('@hotmail.com');
+
+  if (!smtpHost || smtpHost === 'smtp.ukr.net') {
+    if (isGmail) {
+      smtpHost = 'smtp.gmail.com';
+      smtpPort = 465;
+    } else if (isYahoo) {
+      smtpHost = 'smtp.mail.yahoo.com';
+      smtpPort = 465;
+    } else if (isOutlook) {
+      smtpHost = 'smtp.office365.com';
+      smtpPort = 587;
+    } else {
+      smtpHost = 'smtp.ukr.net';
+      smtpPort = 465;
+    }
+  }
+
+  const transportConfig: any = {
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: {
+      user: cleanUser,
+      pass: cleanPass,
+    },
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 12000,
+    tls: {
+      rejectUnauthorized: false
+    }
+  };
+
+  return {
+    transporter: nodemailer.createTransport(transportConfig),
+    cleanUser,
+    cleanPass,
+    smtpHost,
+    smtpPort,
+    isGmail,
+    isUkrNet
+  };
+}
+
+async function sendMailRobust(smtpConfig: ReturnType<typeof createSmtpTransporter>, mailOptions: any) {
+  try {
+    return await smtpConfig.transporter.sendMail(mailOptions);
+  } catch (err: any) {
+    console.warn(`Primary SMTP attempt failed (${smtpConfig.smtpHost}:${smtpConfig.smtpPort}):`, err.message);
+
+    // If Gmail failed on port 465 (e.g. SSL block or timeout), auto-retry on port 587 with STARTTLS
+    if (smtpConfig.isGmail && smtpConfig.smtpPort !== 587) {
+      console.log("Attempting Gmail fallback on smtp.gmail.com:587 (STARTTLS)...");
+      try {
+        const fallbackTransporter = nodemailer.createTransport({
+          host: 'smtp.gmail.com',
+          port: 587,
+          secure: false,
+          auth: {
+            user: smtpConfig.cleanUser,
+            pass: smtpConfig.cleanPass,
+          },
+          connectionTimeout: 8000,
+          greetingTimeout: 8000,
+          socketTimeout: 12000,
+          tls: {
+            rejectUnauthorized: false
+          }
+        });
+        return await fallbackTransporter.sendMail(mailOptions);
+      } catch (fbErr: any) {
+        console.warn("Gmail fallback to port 587 also failed:", fbErr.message);
+        throw err;
+      }
+    }
+
+    // If Ukr.net failed on port 465, attempt port 2525
+    if (smtpConfig.isUkrNet && smtpConfig.smtpPort === 465) {
+      console.log("Attempting Ukr.net fallback on smtp.ukr.net:2525...");
+      try {
+        const fallbackTransporter = nodemailer.createTransport({
+          host: 'smtp.ukr.net',
+          port: 2525,
+          secure: false,
+          auth: {
+            user: smtpConfig.cleanUser,
+            pass: smtpConfig.cleanPass,
+          },
+          connectionTimeout: 8000,
+          greetingTimeout: 8000,
+          socketTimeout: 12000,
+          tls: {
+            rejectUnauthorized: false
+          }
+        });
+        return await fallbackTransporter.sendMail(mailOptions);
+      } catch (fbErr) {
+        // ignore fallback error and throw original
+      }
+    }
+
+    throw err;
+  }
+}
+
 // Helper: Get or Create User Account with temporary or existing custom password
 async function getOrCreateUserForOrder(email: string, phone?: string, name?: string, surname?: string) {
   if (!email || typeof email !== 'string') return { user: null, tempPassword: null, hasCustomPassword: false };
@@ -421,22 +539,11 @@ app.get("/api/health", (req, res) => {
       // 1. Send Guest and Staff Emails safely in isolated try-catch
       if (smtpPass) {
         try {
-          const transporter = nodemailer.createTransport({
-            host: smtpHost,
-            port: smtpPort,
-            secure: smtpPort === 465,
-            auth: {
-              user: smtpUser,
-              pass: smtpPass,
-            },
-            tls: {
-              rejectUnauthorized: false
-            }
-          });
+          const smtpConfig = createSmtpTransporter(smtpUser, smtpPass, smtpHost, smtpPort);
 
           // Send Guest Email
-          await transporter.sendMail({
-            from: smtpUser,
+          await sendMailRobust(smtpConfig, {
+            from: `Sky Garden <${smtpConfig.cleanUser}>`,
             to: orderData.email,
             subject: `Ваш квиток на ${event ? event.title : 'Захід'}`,
             html: htmlBody,
@@ -478,9 +585,9 @@ app.get("/api/health", (req, res) => {
             </div>
           `;
 
-          await transporter.sendMail({
-            from: smtpUser,
-            to: smtpUser,
+          await sendMailRobust(smtpConfig, {
+            from: `Sky Garden <${smtpConfig.cleanUser}>`,
+            to: smtpConfig.cleanUser,
             subject: `⚡ [${quantity} шт] ${orderData.name} (Автосплата Monobank) -> ${event ? event.title : 'Захід'}`,
             html: staffHtml,
           });
@@ -834,39 +941,11 @@ app.get("/api/health", (req, res) => {
     }
 
     try {
-      let smtpHost = bodyHost || "smtp.ukr.net";
-      let smtpPort = bodyPort ? Number(bodyPort) : 465;
-
-      const userLower = smtpUser.toLowerCase().trim();
-      if (!bodyHost) {
-        if (userLower.endsWith("@gmail.com")) {
-          smtpHost = "smtp.gmail.com";
-          smtpPort = 465;
-        } else if (userLower.endsWith("@yahoo.com")) {
-          smtpHost = "smtp.mail.yahoo.com";
-          smtpPort = 465;
-        } else if (userLower.endsWith("@outlook.com") || userLower.endsWith("@hotmail.com")) {
-          smtpHost = "smtp.office365.com";
-          smtpPort = 587;
-        }
-      }
-
-      const transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort,
-        secure: smtpPort === 465,
-        auth: {
-          user: smtpUser,
-          pass: smtpPass,
-        },
-        tls: {
-          rejectUnauthorized: false
-        }
-      });
+      const smtpConfig = createSmtpTransporter(smtpUser, smtpPass, bodyHost, bodyPort);
 
       // 1. Send to Customer
       const mailOptions: any = {
-        from: smtpUser,
+        from: `Sky Garden <${smtpConfig.cleanUser}>`,
         to: email,
         subject,
         html,
@@ -887,7 +966,7 @@ app.get("/api/health", (req, res) => {
         }));
       }
 
-      await transporter.sendMail(mailOptions);
+      await sendMailRobust(smtpConfig, mailOptions);
 
       // 2. Send separate "Staff Notification"
       if (orderDetails) {
@@ -927,12 +1006,16 @@ app.get("/api/health", (req, res) => {
           </div>
         `;
 
-        await transporter.sendMail({
-          from: smtpUser,
-          to: "sky.party@ukr.net",
-          subject: `⚡ [${quantity} шт] ${name} -> ${eventTitle}`,
-          html: staffHtml,
-        });
+        try {
+          await sendMailRobust(smtpConfig, {
+            from: `Sky Garden <${smtpConfig.cleanUser}>`,
+            to: smtpConfig.cleanUser,
+            subject: `⚡ [${quantity} шт] ${name} -> ${eventTitle}`,
+            html: staffHtml,
+          });
+        } catch (staffMailErr) {
+          console.warn("Staff notification email error:", staffMailErr);
+        }
 
         // 3. Telegram Notification
         let botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -1010,44 +1093,12 @@ app.get("/api/health", (req, res) => {
         });
       }
 
-      const targetEmail = testEmail ? String(testEmail).trim() : smtpUser;
+      const smtpConfig = createSmtpTransporter(smtpUser, smtpPass, bodyHost, bodyPort);
+      const targetEmail = testEmail ? String(testEmail).trim() : smtpConfig.cleanUser;
 
-      let smtpHost = bodyHost || "smtp.ukr.net";
-      let smtpPort = bodyPort ? Number(bodyPort) : 465;
-
-      const userLower = smtpUser.toLowerCase().trim();
-      if (!bodyHost) {
-        if (userLower.endsWith("@gmail.com")) {
-          smtpHost = "smtp.gmail.com";
-          smtpPort = 465;
-        } else if (userLower.endsWith("@yahoo.com")) {
-          smtpHost = "smtp.mail.yahoo.com";
-          smtpPort = 465;
-        } else if (userLower.endsWith("@outlook.com") || userLower.endsWith("@hotmail.com")) {
-          smtpHost = "smtp.office365.com";
-          smtpPort = 587;
-        }
-      }
-
-      const transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort,
-        secure: smtpPort === 465,
-        auth: {
-          user: smtpUser,
-          pass: smtpPass,
-        },
-        tls: {
-          rejectUnauthorized: false
-        }
-      });
-
-      // Verify connection configuration
-      await transporter.verify();
-
-      // Send a rich test message
-      const info = await transporter.sendMail({
-        from: `Sky Garden <${smtpUser}>`,
+      // Send a rich test message directly with robust fallback
+      const info = await sendMailRobust(smtpConfig, {
+        from: `Sky Garden <${smtpConfig.cleanUser}>`,
         to: targetEmail,
         subject: "🚀 Тестовий лист від Sky Garden | SMTP перевірка",
         html: `
@@ -1061,9 +1112,9 @@ app.get("/api/health", (req, res) => {
                 Вітаємо! Ваші налаштування поштового сервера підключені успішно. Тепер покупці отримуватимуть квитки та коди відновлення на свої електронні адреси без затримок.
               </p>
               <div style="background: #09090b; border: 1px solid #27272a; border-radius: 16px; padding: 16px; text-align: left; font-size: 12px; color: #71717a; font-family: monospace;">
-                <p style="margin: 0 0 4px 0;"><b>Сервер (Host):</b> ${smtpHost}</p>
-                <p style="margin: 0 0 4px 0;"><b>Порт:</b> ${smtpPort}</p>
-                <p style="margin: 0 0 4px 0;"><b>Відправник:</b> ${smtpUser}</p>
+                <p style="margin: 0 0 4px 0;"><b>Сервер (Host):</b> ${smtpConfig.smtpHost}</p>
+                <p style="margin: 0 0 4px 0;"><b>Порт:</b> ${smtpConfig.smtpPort}</p>
+                <p style="margin: 0 0 4px 0;"><b>Відправник:</b> ${smtpConfig.cleanUser}</p>
                 <p style="margin: 0;"><b>Отримувач тесту:</b> ${targetEmail}</p>
               </div>
               <p style="margin-top: 25px; font-size: 11px; color: #52525b; text-transform: uppercase; letter-spacing: 2px;">
@@ -1085,7 +1136,7 @@ app.get("/api/health", (req, res) => {
       if (errorHint.includes("535") || errorHint.includes("BadCredentials") || errorHint.includes("Username and Password not accepted") || errorHint.includes("Invalid login")) {
         errorHint = "Помилка авторизації (535): Невірний логін або пароль. Для Ukr.net чи Gmail потрібно створити спеціальний «Пароль для зовнішніх програм» у налаштуваннях пошти, а не вводити звичайний пароль від акаунту.";
       } else if (errorHint.includes("ETIMEDOUT") || errorHint.includes("ECONNREFUSED") || errorHint.includes("ENOTFOUND")) {
-        errorHint = `Помилка з'єднання з поштовим сервером (${err.code || 'Мережева помилка'}). Перевірте правильність SMTP Host та порту (зазвичай 465 з SSL).`;
+        errorHint = `Помилка з'єднання з поштовим сервером (${err.code || 'Мережева помилка'}). Перевірте правильність SMTP Host та порту (зазвичай 465 з SSL або 587 з TLS).`;
       }
       return res.status(400).json({
         success: false,
@@ -1375,27 +1426,7 @@ app.get("/api/health", (req, res) => {
       let smtpPort = pData?.smtpPort ? Number(pData.smtpPort) : 465;
 
       if (smtpPass) {
-        const userLower = smtpUser.toLowerCase().trim();
-        if (!pData?.smtpHost) {
-          if (userLower.endsWith("@gmail.com")) {
-            smtpHost = "smtp.gmail.com";
-            smtpPort = 465;
-          } else if (userLower.endsWith("@yahoo.com")) {
-            smtpHost = "smtp.mail.yahoo.com";
-            smtpPort = 465;
-          } else if (userLower.endsWith("@outlook.com") || userLower.endsWith("@hotmail.com")) {
-            smtpHost = "smtp.office365.com";
-            smtpPort = 587;
-          }
-        }
-
-        const transporter = nodemailer.createTransport({
-          host: smtpHost,
-          port: smtpPort,
-          secure: smtpPort === 465,
-          auth: { user: smtpUser, pass: smtpPass },
-          tls: { rejectUnauthorized: false }
-        });
+        const smtpConfig = createSmtpTransporter(smtpUser, smtpPass, pData?.smtpHost, pData?.smtpPort);
 
         const resetHtml = `
           <div style="font-family: -apple-system, system-ui, sans-serif; background: #050505; color: #ffffff; padding: 40px 20px; text-align: center;">
@@ -1428,12 +1459,16 @@ app.get("/api/health", (req, res) => {
           </div>
         `;
 
-        await transporter.sendMail({
-          from: smtpUser,
-          to: targetEmail,
-          subject: `Код відновлення паролю: ${resetCode} | Sky Garden`,
-          html: resetHtml
-        });
+        try {
+          await sendMailRobust(smtpConfig, {
+            from: `Sky Garden <${smtpConfig.cleanUser}>`,
+            to: targetEmail,
+            subject: `Код відновлення паролю: ${resetCode} | Sky Garden`,
+            html: resetHtml
+          });
+        } catch (sendErr: any) {
+          console.error("Failed to send reset code email:", sendErr.message);
+        }
       }
 
       const masked = targetEmail.replace(/(.{2})(.*)(?=@)/, (gp1, gp2, gp3) => gp2 + "*".repeat(Math.max(1, gp3.length)));
