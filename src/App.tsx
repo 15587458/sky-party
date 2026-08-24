@@ -16,7 +16,7 @@ import AboutPage from './components/AboutPage';
 import { motion, AnimatePresence } from 'motion/react';
 import { Instagram, Mail, MapPin, X, Check, Download, Send, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { getFbFirestore } from './lib/firebase';
 import { Order, Event } from './types';
 import axios from 'axios';
@@ -156,13 +156,37 @@ function Home() {
       setIsCheckingPayment(true);
       setIsCheckingMinimized(false);
       setPaymentCheckError(null);
-      
-      const maxAttempts = 15;
+
       let orderToUse: Order | null = null;
       let verifiedPaid = false;
       let sparkLimitFound = false;
       let invalidTokenFound = false;
       let paymentCancelledFound = false;
+
+      // 1. Realtime Firestore listener for instant (0ms latency) response from webhooks / backend
+      let unsubscribeSnapshot: (() => void) | null = null;
+      const snapshotPromise = new Promise<Order | null>((resolve) => {
+        try {
+          unsubscribeSnapshot = onSnapshot(doc(db, 'orders', orderId), (docSnap) => {
+            if (docSnap.exists()) {
+              const data = docSnap.data() as Order;
+              data.id = docSnap.id;
+              if (data.status === 'paid') {
+                resolve(data);
+              } else if (data.status === 'cancelled') {
+                paymentCancelledFound = true;
+                resolve(null);
+              }
+            }
+          }, (err) => {
+            console.warn("Realtime order snapshot error:", err);
+          });
+        } catch (subErr) {
+          console.warn("Could not attach snapshot listener:", subErr);
+        }
+      });
+
+      const maxAttempts = 12;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         if (isCheckingCancelled.current) {
@@ -170,10 +194,9 @@ function Home() {
           break;
         }
         setCurrentAttempt(attempt);
-        console.log(`Checking payment status securely (Attempt ${attempt}/${maxAttempts}) for Order: ${orderId}`);
-        
+
         try {
-          // 1. Always look up the Firestore document first (completely free & allowed on standard Spark plan!)
+          // Check Firestore doc
           const orderSnap = await getDoc(doc(db, 'orders', orderId));
           if (orderSnap.exists()) {
             const order = orderSnap.data() as Order;
@@ -186,12 +209,11 @@ function Home() {
             }
 
             if (order.status === 'cancelled') {
-              console.warn('Order is already marked as cancelled in Firestore.');
               paymentCancelledFound = true;
               break;
             }
 
-            // 2. Query our secure server API, which triggers Monobank API status check
+            // Immediately trigger backend live status check against Monobank API
             try {
               const checkRes = await axios.post('/api/monobank/check-status', {
                 orderId: order.id
@@ -202,59 +224,39 @@ function Home() {
                 orderToUse = order;
                 verifiedPaid = true;
                 break;
-              } else if (checkRes.data && (checkRes.data.status === 'cancelled' || checkRes.data.status === 'failure')) {
-                console.warn('Payment failed/cancelled according to Monobank API.');
+              } else if (checkRes.data && (checkRes.data.status === 'cancelled' || checkRes.data.status === 'failure' || checkRes.data.status === 'reversed')) {
                 paymentCancelledFound = true;
                 break;
               } else {
-                if (checkRes.data && checkRes.data.sparkLimitDetected) {
-                  sparkLimitFound = true;
-                  console.warn('Backend reported Firebase Spark Plan limits detected.');
-                }
-                if (checkRes.data && checkRes.data.invalidTokenDetected) {
-                  invalidTokenFound = true;
-                  console.warn('Backend reported invalid Monobank API Token configuration.');
-                }
+                if (checkRes.data?.sparkLimitDetected) sparkLimitFound = true;
+                if (checkRes.data?.invalidTokenDetected) invalidTokenFound = true;
               }
             } catch (apiErr: any) {
-              console.error('Secure check status API error:', apiErr);
-              if (apiErr.response?.data?.invalidTokenDetected) {
-                invalidTokenFound = true;
-              }
-              if (apiErr.response?.data?.sparkLimitDetected) {
-                sparkLimitFound = true;
-              }
-              // Handle free tickets
-              if (order.ticketType === 'free' || order.price === 0) {
-                try {
-                  await updateDoc(doc(db, 'orders', orderId), { status: 'paid' });
-                  order.status = 'paid';
-                  orderToUse = order;
-                  verifiedPaid = true;
-                  break;
-                } catch (clientErr) {
-                  console.error('Local update to paid failed:', clientErr);
-                }
-              }
+              if (apiErr.response?.data?.invalidTokenDetected) invalidTokenFound = true;
+              if (apiErr.response?.data?.sparkLimitDetected) sparkLimitFound = true;
             }
           }
         } catch (err) {
           console.error(`Error during attempt ${attempt}:`, err);
         }
 
-        // Wait 1.2 seconds before retrying (with fine-grained checks for cancellation)
-        if (attempt < maxAttempts) {
+        // Fast retry interval (800ms) with early cancellation check
+        if (attempt < maxAttempts && !verifiedPaid && !paymentCancelledFound) {
           await new Promise(resolve => {
             let elapsed = 0;
             const interval = setInterval(() => {
-              elapsed += 150;
-              if (isCheckingCancelled.current || elapsed >= 1200) {
+              elapsed += 100;
+              if (isCheckingCancelled.current || elapsed >= 800) {
                 clearInterval(interval);
                 resolve(null);
               }
-            }, 150);
+            }, 100);
           });
         }
+      }
+
+      if (unsubscribeSnapshot) {
+        unsubscribeSnapshot();
       }
 
       setIsCheckingPayment(false);
@@ -262,10 +264,8 @@ function Home() {
       setCheckingOrderId(null);
 
       if (verifiedPaid && orderToUse) {
-        // Search inside both rawEvents and events to find the bought event
         let event = (rawEvents || events || []).find(e => e.id === orderToUse!.eventId);
 
-        // As a robust database fallback, fetch from firestore directly if memory state has not loaded
         if (!event) {
           try {
             const eventSnap = await getDoc(doc(db, 'events', orderToUse!.eventId));
@@ -280,8 +280,6 @@ function Home() {
         if (event) {
           setPaidOrder({ order: orderToUse!, event });
         } else {
-          console.warn('Could not find event for paid order.');
-          // Instantiate placeholder event so checkout can always render or download successfully
           const placeholderEvent: Event = {
             id: orderToUse!.eventId,
             title: 'Подія',
@@ -298,23 +296,24 @@ function Home() {
           setPaidOrder({ order: orderToUse!, event: placeholderEvent });
         }
       } else {
-        // Automatically mark the order as 'cancelled' in Firestore if it was not paid and attempts are exhausted
-        try {
-          await updateDoc(doc(db, 'orders', orderId), { status: 'cancelled' });
-          console.log(`Order ${orderId} automatically updated to 'cancelled' in Firestore because no payment was detected after all attempts.`);
-        } catch (dbErr) {
-          console.error("Error setting order to cancelled in Firestore:", dbErr);
-        }
+        if (!isCheckingCancelled.current) {
+          try {
+            await updateDoc(doc(db, 'orders', orderId), { status: 'cancelled' });
+            console.log(`Order ${orderId} marked as 'cancelled' in Firestore.`);
+          } catch (dbErr) {
+            console.error("Error setting order to cancelled:", dbErr);
+          }
 
-        setFailedOrderId(orderId);
-        if (invalidTokenFound) {
-          setPaymentCheckError('Помилка авторизації з сервером Monobank. Схоже, вказано некоректний або застарілий API токен у приватних налаштуваннях адмін-панелі. Будь ласка, перевірте його.');
-        } else if (paymentCancelledFound) {
-          setPaymentCheckError('Спроба оплати була скасована, відхилена банком або термін дії інвойсу минув. Будь ласка, спробуйте ще раз.');
-        } else if (sparkLimitFound) {
-          setPaymentCheckError('Помилка мережі (Firebase Spark Plan limit). Ваш сервер не зміг підключитися з базою Monobank. Перейдіть на платний план Blaze (Pay-as-you-go) у Firebase Console, щоб зняти обмеження на зовнішні запити.');
-        } else {
-          setPaymentCheckError('Оплата замовлення ще очікує підтвердження банком або відхилена. Будь ласка, спробуйте ще раз через кілька секунд, якщо оплата точно успішна.');
+          setFailedOrderId(orderId);
+          if (invalidTokenFound) {
+            setPaymentCheckError('Помилка авторизації з Monobank API. Перевірте токен в налаштуваннях адмін-панелі.');
+          } else if (paymentCancelledFound) {
+            setPaymentCheckError('Оплату було скасовано або відхилено банком.');
+          } else if (sparkLimitFound) {
+            setPaymentCheckError('Помилка підключення до платіжного шлюзу.');
+          } else {
+            setPaymentCheckError('Оплата не підтверджена або була скасована.');
+          }
         }
       }
     };
@@ -339,22 +338,8 @@ function Home() {
     }
   };
 
-  const handleCancelChecking = async () => {
-    isCheckingCancelled.current = true;
-    setIsCheckingPayment(false);
-    setIsCheckingMinimized(false);
-    if (checkingOrderId) {
-      const db = getFbFirestore();
-      if (db) {
-        try {
-          await updateDoc(doc(db, 'orders', checkingOrderId), { status: 'cancelled' });
-          console.log(`Order ${checkingOrderId} updated to 'cancelled' in Firestore.`);
-        } catch (err) {
-          console.error("Error setting order status to cancelled:", err);
-        }
-      }
-    }
-    setCheckingOrderId(null);
+  const handleMinimizeChecking = () => {
+    setIsCheckingMinimized(true);
   };
 
   const handleClosePaymentCheckError = () => {
@@ -393,21 +378,15 @@ function Home() {
               <div className="space-y-2">
                 <h3 className="text-xl font-bold uppercase text-white tracking-tight">Перевірка оплати</h3>
                 <p className="text-sm font-medium text-zinc-400">З'єднуємося з платіжною системою Monobank...</p>
-                <p className="text-xs text-zinc-500 font-mono">Спроба {currentAttempt} з 15. Автоперевірка триває...</p>
+                <p className="text-xs text-zinc-500 font-mono">Спроба {currentAttempt} з 12. Автоперевірка триває...</p>
               </div>
 
               <div className="pt-2 flex flex-col gap-2">
                 <button 
-                  onClick={handleBypassPayment}
-                  className="w-full py-3.5 bg-green-600 hover:bg-green-500 text-white font-black uppercase tracking-widest text-xs rounded-2xl transition-all shadow-lg hover:shadow-green-600/10 cursor-pointer"
-                >
-                  ⚡ Оплатити тестово (Bypass)
-                </button>
-                <button 
-                  onClick={() => setIsCheckingMinimized(true)}
+                  onClick={handleMinimizeChecking}
                   className="w-full py-3.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold uppercase tracking-widest text-xs rounded-2xl transition-all cursor-pointer"
                 >
-                  Скасувати (перевіряти у фоні)
+                  Перевіряти у фоні
                 </button>
               </div>
             </motion.div>
@@ -427,20 +406,14 @@ function Home() {
             <div className="w-8 h-8 border-4 border-purple-500/20 border-t-purple-500 rounded-full animate-spin flex-shrink-0" />
             <div className="flex-1 text-left min-w-[140px]">
               <p className="text-xs font-black uppercase tracking-wider text-white">Перевірка оплати</p>
-              <p className="text-[10px] text-zinc-400 font-mono">Спроба {currentAttempt} з 15. У фоні...</p>
+              <p className="text-[10px] text-zinc-400 font-mono">Спроба {currentAttempt} з 12. У фоні...</p>
             </div>
             <div className="flex gap-2">
               <button 
                 onClick={() => setIsCheckingMinimized(false)}
-                className="px-2.5 py-1.5 bg-zinc-850 hover:bg-zinc-800 text-[10px] font-bold text-white rounded-xl transition-all uppercase tracking-wider cursor-pointer"
+                className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-white rounded-xl transition-all uppercase tracking-wider cursor-pointer"
               >
                 Розгорнути
-              </button>
-              <button 
-                onClick={handleCancelChecking}
-                className="px-2.5 py-1.5 bg-red-950/45 hover:bg-red-900/45 text-red-400 text-[10px] font-bold rounded-xl transition-all uppercase tracking-wider cursor-pointer"
-              >
-                Скасувати
               </button>
             </div>
           </motion.div>

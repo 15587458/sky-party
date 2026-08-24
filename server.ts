@@ -510,16 +510,23 @@ app.get("/api/health", (req, res) => {
       const isPaid = monobankStatus === "success" || monobankStatus === "hold";
 
       if (isPaid && order.status !== 'paid') {
-        await updateDoc(orderRef, { status: 'paid' });
+        const updateFields: any = {
+          status: 'paid',
+          paidAt: order.paidAt || new Date().toISOString(),
+          monobankStatus,
+          ticketSent: true,
+        };
+        await updateDoc(orderRef, updateFields);
         console.log(`Status Check Secure -> Order ${orderId} is paid successfully!`);
-        sendNotificationsForPaidOrder(orderId, { ...order, status: 'paid' });
-        return res.json({ status: 'paid', order: { ...order, status: 'paid' } });
+        const updatedOrder = { ...order, ...updateFields };
+        sendNotificationsForPaidOrder(orderId, updatedOrder);
+        return res.json({ status: 'paid', order: updatedOrder });
       } else if (monobankStatus === "reversed" && order.status !== "reversed" && order.status !== "cancelled") {
-        await updateDoc(orderRef, { status: "cancelled" });
-        return res.json({ status: 'cancelled', order: { ...order, status: 'cancelled' } });
+        await updateDoc(orderRef, { status: "cancelled", monobankStatus });
+        return res.json({ status: 'cancelled', order: { ...order, status: 'cancelled', monobankStatus } });
       } else if ((monobankStatus === "failure" || monobankStatus === "expired") && order.status === "pending") {
-        await updateDoc(orderRef, { status: "cancelled" });
-        return res.json({ status: 'cancelled', order: { ...order, status: 'cancelled' } });
+        await updateDoc(orderRef, { status: "cancelled", monobankStatus });
+        return res.json({ status: 'cancelled', order: { ...order, status: 'cancelled', monobankStatus } });
       }
 
       const currentStatus = isPaid ? 'paid' : order.status;
@@ -609,8 +616,9 @@ app.get("/api/health", (req, res) => {
 
             // Perform direct status verification call to Monobank
             let realMonobankStatus = "created";
+            let checkResponse: any = null;
             try {
-              const checkResponse = await axios.get(
+              checkResponse = await axios.get(
                 `https://api.monobank.ua/api/merchant/invoice/status?invoiceId=${targetInvoiceId}`,
                 { headers: { "X-Token": activeToken } }
               );
@@ -627,17 +635,30 @@ app.get("/api/health", (req, res) => {
               return res.status(400).json({ error: "Invoice is not paid" });
             }
 
+            // Verify paid amount matches the order price in kopecks
+            const expectedAmountKopecks = Math.round(Number(order.price || 0) * 100);
+            const actualAmountKopecks = Number(rawBody.amount || checkResponse.data?.amount || 0);
+            if (expectedAmountKopecks > 0 && actualAmountKopecks > 0 && actualAmountKopecks < expectedAmountKopecks) {
+              console.error(`Webhook security ALERT -> Amount mismatch for order ${orderId}: Expected ${expectedAmountKopecks} kopecks, but received ${actualAmountKopecks} kopecks.`);
+              return res.status(400).json({ error: "Paid amount mismatch" });
+            }
+
             const orderRef = doc(db, 'orders', orderId);
-            // Secure update: Mark order as paid
-            const updateFields: any = { status: 'paid' };
+            // Secure update: Mark order as paid with timestamp
+            const updateFields: any = { 
+              status: 'paid',
+              paidAt: new Date().toISOString(),
+              monobankStatus: realMonobankStatus,
+              ticketSent: true,
+            };
             if (targetInvoiceId && !order.monobankInvoiceId) {
               updateFields.monobankInvoiceId = targetInvoiceId;
             }
             await updateDoc(orderRef, updateFields);
             console.log(`Webhook secure check -> Order ${orderId} successfully validated and marked as paid.`);
 
-            // Send notification triggers asynchronously
-            sendNotificationsForPaidOrder(orderId, { ...order, status: 'paid' });
+            // Send notification triggers asynchronously (Email with QR codes + Telegram alert)
+            sendNotificationsForPaidOrder(orderId, { ...order, ...updateFields });
             
             return res.json({ status: "ok" });
           } else {
