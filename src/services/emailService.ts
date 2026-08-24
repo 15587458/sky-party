@@ -11,7 +11,8 @@ export const sendTicketEmail = async (
   privateSettings: PrivateSettings | null,
   selectedSeat?: ChartElement,
   quantity: number = 1,
-  config?: SiteConfig | null
+  config?: SiteConfig | null,
+  phone?: string
 ) => {
   if (!privateSettings?.smtpPass) {
     console.warn('SMTP Password not configured client-side, proceeding to let backend use its own secure settings fallback.');
@@ -208,7 +209,7 @@ export const sendTicketEmail = async (
             </div>
 
             <!-- Header of QR Codes -->
-            <h3 style="font-size: 12px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; color: #71717a; margin: 0 0 15px 10px;">ШВИДКЕ СКА can</h3>
+            <h3 style="font-size: 12px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; color: #71717a; margin: 0 0 15px 10px;">ШВИДКЕ СКАНУВАННЯ</h3>
             <!-- QR Codes -->
             <div>
               ${qrCodesHtml}
@@ -242,6 +243,7 @@ export const sendTicketEmail = async (
       orderDetails: {
         name,
         surname,
+        phone,
         eventTitle: event.title,
         quantity,
         ticketType,

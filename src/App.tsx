@@ -12,9 +12,10 @@ import AdminDashboard from './components/AdminDashboard';
 import AdminLogin from './components/AdminLogin';
 import QRScanner from './components/QRScanner';
 import AboutPage from './components/AboutPage';
+import UserCabinet from './components/UserCabinet';
 
 import { motion, AnimatePresence } from 'motion/react';
-import { Instagram, Mail, MapPin, X, Check, Download, Send, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Instagram, Mail, MapPin, X, Check, Download, Send, AlertTriangle, RefreshCw, Ticket } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { getFbFirestore } from './lib/firebase';
@@ -480,104 +481,29 @@ function Home() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-lg bg-[#050505] border border-white/10 p-10 rounded-[40px] text-center"
+              className="relative w-full max-w-lg bg-[#050505] border border-white/10 p-8 sm:p-10 rounded-[40px] text-center max-h-[90vh] overflow-y-auto"
             >
-              {isResending ? (
-                <>
-                  <div className="w-20 h-20 bg-purple-500/10 rounded-full flex items-center justify-center mx-auto mb-8 border border-purple-500/20 relative">
-                    <div className="absolute inset-0 border-4 border-purple-500/20 border-t-purple-500 rounded-full animate-spin" />
-                    <Mail size={32} className="text-purple-500 animate-pulse" />
-                  </div>
-                  
-                  <h2 className="text-2xl font-black uppercase text-white mb-2 tracking-tight animate-pulse">
-                    Відправляємо квитки...
-                  </h2>
-                  <p className="text-zinc-400 mb-6 font-medium text-sm">
-                    Надсилаємо квитки на пошту <span className="text-purple-400 font-bold">{customResendEmail}</span>.
-                  </p>
-                  
-                  {resendError && resendError.includes('Спроба') && (
-                    <div className="mb-6 bg-purple-500/10 border border-purple-500/20 py-2 px-4 rounded-xl inline-block text-purple-400 text-xs font-mono">
-                      {resendError}
-                    </div>
-                  )}
-                </>
-              ) : resendSuccess ? (
-                <>
-                  <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-8 shadow-[0_0_30px_rgba(34,197,94,0.3)]">
-                    <Check size={40} className="text-black" />
-                  </div>
-                  
-                  <h2 className="text-3xl font-black uppercase text-white mb-2 tracking-tight">
-                    Дякуємо!
-                  </h2>
-                  <p className="text-green-400 mb-6 font-medium text-sm">
-                    ✓ Квитки успішно надіслано на <span className="font-bold underline">{customResendEmail}</span>!
-                  </p>
-                </>
-              ) : (
-                <>
-                  <div className="w-20 h-20 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto mb-8 border border-red-500/20 shadow-[0_0_20px_rgba(239,68,68,0.1)]">
-                    <AlertTriangle size={36} />
-                  </div>
-                  
-                  <h2 className="text-2xl font-black uppercase text-red-500 mb-2 tracking-tight">
-                    Помилка відправки!
-                  </h2>
-                  <p className="text-zinc-400 mb-6 font-medium text-sm">
-                    Автоматичні спроби відправки на пошту вичерпані.
-                  </p>
-                  
-                  {resendError && (
-                    <div className="mb-6 bg-red-500/10 border border-red-500/25 p-4 rounded-2xl text-left text-xs text-red-400 leading-relaxed font-mono">
-                      {resendError}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Email Input Field block located in the main visible area */}
-              <div className="bg-zinc-900/40 p-6 rounded-3xl border border-white/5 space-y-3 mb-8">
-                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500 text-left">
-                  Email для отримання квитків (можна змінити):
-                </p>
-                <div className="flex gap-2">
-                  <input 
-                    type="email"
-                    disabled={isResending}
-                    value={customResendEmail}
-                    onChange={e => setCustomResendEmail(e.target.value)}
-                    placeholder="example@gmail.com"
-                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 text-xs outline-none focus:border-purple-500 font-mono text-white h-11 disabled:opacity-50"
-                  />
-                  <button
-                    onClick={() => {
-                      if (isResending || !customResendEmail.includes('@')) return;
-                      sendTicketWithAutoRetries(customResendEmail);
-                    }}
-                    disabled={isResending || !customResendEmail.includes('@')}
-                    className="bg-purple-600 hover:bg-purple-500 disabled:bg-zinc-800 disabled:opacity-40 text-white text-[10px] font-bold uppercase tracking-widest px-4 rounded-xl transition-all h-11 shrink-0 flex items-center justify-center gap-1.5"
-                  >
-                    {isResending ? (
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    ) : resendSuccess ? (
-                      <>
-                        <RefreshCw size={12} /> Надіслати ще раз
-                      </>
-                    ) : (
-                      <>
-                        <Send size={12} /> Надіслати
-                      </>
-                    )}
-                  </button>
-                </div>
+              <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(34,197,94,0.3)]">
+                <Check size={36} className="text-black" />
+              </div>
+              
+              <h2 className="text-2xl sm:text-3xl font-black uppercase text-white mb-2 tracking-tight">
+                Оплата успішна!
+              </h2>
+              <p className="text-sm text-zinc-300 font-bold mb-1">
+                {paidOrder.event.title}
+              </p>
+              
+              <div className="mb-6 p-3 bg-green-500/10 border border-green-500/25 rounded-2xl inline-flex items-center gap-2 text-green-400 text-xs font-medium">
+                <Mail size={14} className="shrink-0" />
+                <span>Квитки автоматично надіслано на <span className="font-bold underline">{paidOrder.order.email}</span></span>
               </div>
 
               {/* QR Codes Preview */}
-              <div className="max-h-[300px] overflow-y-auto mb-8 pr-2 space-y-4 text-left">
+              <div className="space-y-3 mb-8 text-left">
                 <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Ваші QR-квитки для входу:</p>
                 {Array.from({ length: paidOrder.order.quantity || 1 }).map((_, i) => (
-                  <div key={i} className="bg-zinc-900/30 p-4 rounded-3xl border border-white/5 flex items-center gap-4">
+                  <div key={i} className="bg-zinc-900/40 p-4 rounded-3xl border border-white/5 flex items-center gap-4">
                     <div className="bg-white p-2 rounded-xl shrink-0">
                       <img 
                         src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${paidOrder.order.id}:${i + 1}`} 
@@ -586,8 +512,9 @@ function Home() {
                       />
                     </div>
                     <div className="text-left">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-zinc-650">Квиток {i + 1}</p>
-                      <p className="text-white font-bold">{paidOrder.order.id}-{i + 1}</p>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-purple-400">Квиток {i + 1} з {paidOrder.order.quantity || 1}</p>
+                      <p className="text-white font-mono font-bold text-sm">{paidOrder.order.id}-{i + 1}</p>
+                      <p className="text-xs text-zinc-400 mt-0.5">{paidOrder.order.name} {paidOrder.order.surname} • {paidOrder.order.ticketType.toUpperCase()}</p>
                     </div>
                   </div>
                 ))}
@@ -681,12 +608,26 @@ function Home() {
                   <Download size={18} className={isDownloadingPdf ? "animate-spin" : ""} />
                   {isDownloadingPdf ? 'Генерація PDF...' : 'Завантажити квиток (PDF)'}
                 </button>
+
+                <Link
+                  to="/cabinet"
+                  onClick={() => {
+                    localStorage.setItem('user_cabinet_identifier', paidOrder.order.email || paidOrder.order.phone);
+                    setPaidOrder(null);
+                    setSearchParams({});
+                  }}
+                  className="w-full py-4 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 font-bold uppercase tracking-widest text-xs rounded-2xl border border-purple-500/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Ticket size={16} />
+                  Перейти в особистий кабінет
+                </Link>
+
                 <button 
                   onClick={() => {
                     setPaidOrder(null);
                     setSearchParams({});
                   }}
-                  className="w-full bg-zinc-900 text-zinc-500 py-4 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-zinc-800 transition-all cursor-pointer"
+                  className="w-full bg-zinc-900 text-zinc-500 py-3.5 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-zinc-800 transition-all cursor-pointer"
                 >
                   Закрити
                 </button>
@@ -715,6 +656,12 @@ function Home() {
             </div>
 
             <div className="flex flex-col items-start md:items-end text-left md:text-right gap-3">
+               <Link 
+                to="/cabinet"
+                className="text-sm font-black tracking-[0.2em] uppercase text-purple-400 hover:text-purple-300 transition-all flex items-center gap-1.5 cursor-pointer"
+               >
+                 <Ticket size={16} /> Особистий кабінет (Мої квитки)
+               </Link>
                <Link 
                 to="/about"
                 className="text-sm font-black tracking-[0.3em] uppercase text-white hover:text-neon-purple transition-all border-b border-white/20 pb-1 cursor-pointer"
@@ -745,6 +692,8 @@ export default function App() {
       <Router>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/cabinet" element={<UserCabinet />} />
+          <Route path="/tickets" element={<UserCabinet />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/admin" element={<AdminLogin />} />
           <Route path="/scan" element={<QRScanner />} />

@@ -131,3 +131,17 @@ export interface SiteConfig {
   ticketMessage?: string;
   siteUrl?: string;
 }
+
+export interface UserAccount {
+  id?: string;
+  email: string;
+  phone?: string;
+  name?: string;
+  surname?: string;
+  password?: string;
+  tempPassword?: string;
+  hasCustomPassword?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+}
+

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Instagram } from 'lucide-react';
+import { Instagram, Ticket } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 
 export default function Navbar() {
@@ -36,6 +36,14 @@ export default function Navbar() {
       </Link>
       
       <div className="flex items-center gap-2 sm:gap-4">
+        <Link
+          to="/cabinet"
+          className="flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 hover:text-white transition-all text-xs font-bold uppercase tracking-wider cursor-pointer"
+        >
+          <Ticket size={15} />
+          <span className="hidden sm:inline">Мої квитки</span>
+        </Link>
+
         {config?.instagramUrl && (
           <a 
             href={config.instagramUrl} 

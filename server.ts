@@ -8,6 +8,8 @@ import {
   initializeFirestore,
   doc,
   getDoc,
+  setDoc,
+  deleteDoc,
   updateDoc,
   collection,
   query,
@@ -28,6 +30,63 @@ const db = initializeFirestore(fbApp, {
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Helper: Get or Create User Account with temporary or existing custom password
+async function getOrCreateUserForOrder(email: string, phone?: string, name?: string, surname?: string) {
+  if (!email || typeof email !== 'string') return { user: null, tempPassword: null, hasCustomPassword: false };
+  const normalizedEmail = email.toLowerCase().trim();
+  const userRef = doc(db, 'users', normalizedEmail);
+  
+  try {
+    const userSnap = await getDoc(userRef);
+    if (userSnap.exists()) {
+      const userData = userSnap.data() as any;
+      if (userData.hasCustomPassword) {
+        // User already has a custom password, DO NOT show temp password in emails
+        const updates: any = { updatedAt: Date.now() };
+        if (phone && !userData.phone) updates.phone = phone;
+        if (name && !userData.name) updates.name = name;
+        if (surname && !userData.surname) updates.surname = surname;
+        await updateDoc(userRef, updates);
+        return { user: { ...userData, ...updates }, tempPassword: null, hasCustomPassword: true };
+      } else {
+        // User has not set custom password yet. Reuse or create temporary password
+        let tempPassword = userData.tempPassword;
+        if (!tempPassword) {
+          tempPassword = `SKY-${Math.floor(100000 + Math.random() * 900000)}`;
+        }
+        const updates: any = {
+          tempPassword,
+          hasCustomPassword: false,
+          updatedAt: Date.now()
+        };
+        if (phone) updates.phone = phone;
+        if (name) updates.name = name;
+        if (surname) updates.surname = surname;
+        await updateDoc(userRef, updates);
+        return { user: { ...userData, ...updates }, tempPassword, hasCustomPassword: false };
+      }
+    } else {
+      // Create new user account with temporary password
+      const tempPassword = `SKY-${Math.floor(100000 + Math.random() * 900000)}`;
+      const newUser = {
+        email: normalizedEmail,
+        phone: phone || '',
+        name: name || '',
+        surname: surname || '',
+        tempPassword,
+        hasCustomPassword: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      await setDoc(userRef, newUser);
+      return { user: newUser, tempPassword, hasCustomPassword: false };
+    }
+  } catch (err: any) {
+    console.error("Error in getOrCreateUserForOrder:", err.message);
+    return { user: null, tempPassword: null, hasCustomPassword: false };
+  }
+}
 
 // API Routes
 app.get("/api/health", (req, res) => {
@@ -228,6 +287,18 @@ app.get("/api/health", (req, res) => {
       // Build dynamic ticket text
       const quantity = orderData.quantity || 1;
       const ticketType = orderData.ticketType || 'standard';
+
+      // Create or retrieve user account info & temporary password
+      let tempPassword: string | null = null;
+      let hasCustomPassword = false;
+      try {
+        const userRes = await getOrCreateUserForOrder(orderData.email, orderData.phone, orderData.name, orderData.surname);
+        tempPassword = userRes.tempPassword;
+        hasCustomPassword = userRes.hasCustomPassword;
+      } catch (uErr) {
+        console.error("Purchase Notification -> User Account error:", uErr);
+      }
+
       const qrCodesHtml = Array.from({ length: quantity }).map((_, i) => `
         <div style="background: #111115; padding: 25px; border-radius: 24px; margin-bottom: 20px; border: 1px solid #222226; text-align: center;">
           <p style="font-size: 10px; color: #71717a; margin: 0 0 12px 0; text-transform: uppercase; font-weight: 900; letter-spacing: 1px;">КВИТОК ${i + 1} З ${quantity}</p>
@@ -253,6 +324,30 @@ app.get("/api/health", (req, res) => {
                 <h2 style="color: #ffffff; margin: 0 0 8px 0; font-size: 24px; font-weight: 950; letter-spacing: -0.5px; text-transform: uppercase;">Ваші квитки готові!</h2>
                 <p style="font-size: 15px; color: #a1a1aa; margin: 0;">Дякуємо за покупку. Електронні квитки готові та відображаються нижче.</p>
               </div>
+
+              <!-- Cabinet & Temporary Password Box -->
+              ${tempPassword ? `
+                <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 24px; padding: 22px; margin-bottom: 25px; text-align: left;">
+                  <p style="font-size: 11px; font-weight: 900; color: #c084fc; text-transform: uppercase; letter-spacing: 1.5px; margin: 0 0 8px 0;">🔐 ВАШ ОСОБИСТИЙ КАБІНЕТ</p>
+                  <p style="font-size: 13px; color: #e4e4e7; margin: 0 0 12px 0; line-height: 1.4;">
+                    Усі ваші квитки та історія замовлень доступні у вашому особистому кабінеті.
+                  </p>
+                  <div style="background: #000000; border-radius: 14px; padding: 12px 16px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 12px;">
+                    <p style="margin: 0 0 6px 0; font-size: 12px; color: #a1a1aa;">Логін: <b style="color: #ffffff; font-family: monospace;">${orderData.email}</b></p>
+                    <p style="margin: 0; font-size: 12px; color: #a1a1aa;">Тимчасовий пароль: <b style="color: #c084fc; font-family: monospace; font-size: 15px; letter-spacing: 1px;">${tempPassword}</b></p>
+                  </div>
+                  <p style="font-size: 11px; color: #71717a; margin: 0; line-height: 1.4;">
+                    *Ви можете змінити цей пароль на власний у кабінеті. Після зміни пароль більше ніколи не буде відображатися в листах.
+                  </p>
+                </div>
+              ` : `
+                <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; padding: 16px 20px; margin-bottom: 25px; text-align: left;">
+                  <p style="font-size: 11px; font-weight: 900; color: #a1a1aa; text-transform: uppercase; letter-spacing: 1.5px; margin: 0 0 4px 0;">🔐 ОСОБИСТИЙ КАБІНЕТ</p>
+                  <p style="font-size: 12px; color: #71717a; margin: 0;">
+                    Квитки завжди доступні в кабінеті (вхід за вашим постійним паролем).
+                  </p>
+                </div>
+              `}
               
               <!-- Event Info -->
               <div style="background: #111115; padding: 25px; border-radius: 24px; border: 1px solid #222226; margin-bottom: 30px;">
@@ -777,6 +872,13 @@ app.get("/api/health", (req, res) => {
         html,
       };
 
+      // Bootstrap or update user account
+      try {
+        await getOrCreateUserForOrder(email, orderDetails?.phone, orderDetails?.name, orderDetails?.surname);
+      } catch (uErr) {
+        console.warn("Could not sync user in /api/email/ticket:", uErr);
+      }
+
       if (pdfAttachments && Array.isArray(pdfAttachments)) {
         mailOptions.attachments = pdfAttachments.map((att: any) => ({
           filename: att.filename,
@@ -874,6 +976,607 @@ app.get("/api/health", (req, res) => {
     } catch (error: any) {
       console.error("Email Error:", error.message);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ==========================================
+  // USER CABINET & AUTHENTICATION ENDPOINTS
+  // ==========================================
+
+  // Cabinet: User Registration
+  app.post("/api/cabinet/register", async (req: any, res: any) => {
+    try {
+      const { email, password, name, surname, phone } = req.body || {};
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email та пароль є обов'язковими для реєстрації" });
+      }
+      const rawEmail = String(email).trim().toLowerCase();
+      if (!rawEmail.includes("@")) {
+        return res.status(400).json({ error: "Вкажіть коректну адресу електронної пошти" });
+      }
+      const passTrimmed = String(password).trim();
+      if (passTrimmed.length < 4) {
+        return res.status(400).json({ error: "Пароль повинен містити щонайменше 4 символи" });
+      }
+
+      const userRef = doc(db, 'users', rawEmail);
+      const snap = await getDoc(userRef);
+
+      if (snap.exists()) {
+        const existing = snap.data();
+        if (existing.hasCustomPassword) {
+          return res.status(400).json({ error: "Акаунт з таким email вже існує. Будь ласка, увійдіть або відновіть пароль." });
+        } else {
+          // Upgrade user with custom password
+          const updatedUser: any = {
+            ...existing,
+            name: name ? String(name).trim() : (existing.name || ''),
+            surname: surname ? String(surname).trim() : (existing.surname || ''),
+            phone: phone ? String(phone).trim() : (existing.phone || ''),
+            password: passTrimmed,
+            hasCustomPassword: true,
+            tempPassword: null,
+            updatedAt: Date.now()
+          };
+          await setDoc(userRef, updatedUser, { merge: true });
+          return res.json({
+            success: true,
+            user: {
+              id: rawEmail,
+              email: rawEmail,
+              phone: updatedUser.phone,
+              name: updatedUser.name,
+              surname: updatedUser.surname,
+              hasCustomPassword: true,
+              createdAt: updatedUser.createdAt || Date.now()
+            }
+          });
+        }
+      }
+
+      // Check if there are past orders with this email to pre-fill name/phone
+      let initialName = name ? String(name).trim() : '';
+      let initialSurname = surname ? String(surname).trim() : '';
+      let initialPhone = phone ? String(phone).trim() : '';
+
+      if (!initialName || !initialPhone) {
+        try {
+          const ordersSnap = await getDocs(collection(db, 'orders'));
+          ordersSnap.forEach(d => {
+            const ord = d.data();
+            if (String(ord.email || '').toLowerCase().trim() === rawEmail) {
+              if (!initialName && ord.name) initialName = ord.name;
+              if (!initialSurname && ord.surname) initialSurname = ord.surname;
+              if (!initialPhone && ord.phone) initialPhone = ord.phone;
+            }
+          });
+        } catch (e) {
+          console.warn("Could not check past orders on registration:", e);
+        }
+      }
+
+      const newUser = {
+        email: rawEmail,
+        name: initialName,
+        surname: initialSurname,
+        phone: initialPhone,
+        password: passTrimmed,
+        hasCustomPassword: true,
+        tempPassword: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+
+      await setDoc(userRef, newUser);
+
+      return res.json({
+        success: true,
+        user: {
+          id: rawEmail,
+          email: rawEmail,
+          phone: newUser.phone,
+          name: newUser.name,
+          surname: newUser.surname,
+          hasCustomPassword: true,
+          createdAt: newUser.createdAt
+        }
+      });
+    } catch (err: any) {
+      console.error("Cabinet Register Error:", err.message);
+      return res.status(500).json({ error: err.message || "Помилка при реєстрації" });
+    }
+  });
+
+  // Cabinet: User Login (by email or phone + temporary or custom password)
+  app.post("/api/cabinet/login", async (req: any, res: any) => {
+    try {
+      const { identifier, password } = req.body || {};
+      if (!identifier || !password) {
+        return res.status(400).json({ error: "Вкажіть логін (email або телефон) та пароль" });
+      }
+      const raw = String(identifier).trim();
+      const isEmail = raw.includes("@");
+      const normalizedDigits = raw.replace(/[^\d]/g, '');
+
+      let userDoc: any = null;
+      let userId: string = '';
+
+      if (isEmail) {
+        const userRef = doc(db, 'users', raw.toLowerCase());
+        const snap = await getDoc(userRef);
+        if (snap.exists()) {
+          userDoc = snap.data();
+          userId = snap.id;
+        } else {
+          // Also search users collection by field
+          const usersSnap = await getDocs(collection(db, 'users'));
+          usersSnap.forEach(d => {
+            const u = d.data();
+            if (String(u.email || '').toLowerCase().trim() === raw.toLowerCase()) {
+              userDoc = u;
+              userId = d.id;
+            }
+          });
+        }
+      } else if (normalizedDigits.length >= 6) {
+        // Look up by phone in users collection
+        const usersSnap = await getDocs(collection(db, 'users'));
+        usersSnap.forEach(d => {
+          const u = d.data();
+          const uPhoneDigits = String(u.phone || '').replace(/[^\d]/g, '');
+          if (
+            (uPhoneDigits && uPhoneDigits.includes(normalizedDigits)) || 
+            (normalizedDigits && normalizedDigits.includes(uPhoneDigits)) || 
+            (normalizedDigits.length >= 9 && uPhoneDigits.slice(-9) === normalizedDigits.slice(-9))
+          ) {
+            userDoc = u;
+            userId = d.id;
+          }
+        });
+      }
+
+      // If user doesn't exist in 'users' collection yet, check existing orders to bootstrap account
+      if (!userDoc) {
+        const ordersSnap = await getDocs(collection(db, 'orders'));
+        let foundOrder: any = null;
+        ordersSnap.forEach(d => {
+          const ord = d.data();
+          if (isEmail && String(ord.email || '').toLowerCase().trim() === raw.toLowerCase()) {
+            foundOrder = ord;
+          } else if (!isEmail && normalizedDigits.length >= 6) {
+            const ordDigits = String(ord.phone || '').replace(/[^\d]/g, '');
+            if (ordDigits.includes(normalizedDigits) || normalizedDigits.includes(ordDigits)) {
+              foundOrder = ord;
+            }
+          }
+        });
+
+        if (foundOrder && foundOrder.email) {
+          const resInfo = await getOrCreateUserForOrder(foundOrder.email, foundOrder.phone, foundOrder.name, foundOrder.surname);
+          userDoc = resInfo.user;
+          userId = foundOrder.email.toLowerCase().trim();
+        }
+      }
+
+      if (!userDoc) {
+        return res.status(404).json({ error: "Користувача з такими даними не знайдено. Якщо ви ще не створили акаунт, оберіть «Реєстрація» нижче." });
+      }
+
+      const passTrimmed = String(password).trim();
+      const matchesCustom = userDoc.hasCustomPassword && (userDoc.password === passTrimmed || userDoc.tempPassword === passTrimmed);
+      const matchesTemp = !userDoc.hasCustomPassword && (userDoc.tempPassword === passTrimmed || userDoc.password === passTrimmed);
+
+      if (!matchesCustom && !matchesTemp) {
+        return res.status(401).json({ 
+          error: "Невірний пароль. Якщо ви ще не змінювали пароль, скористайтеся тимчасовим паролем з листа або натисніть «Забули пароль?»." 
+        });
+      }
+
+      return res.json({
+        success: true,
+        user: {
+          id: userId || userDoc.email,
+          email: userDoc.email,
+          phone: userDoc.phone || '',
+          name: userDoc.name || '',
+          surname: userDoc.surname || '',
+          hasCustomPassword: !!userDoc.hasCustomPassword,
+          createdAt: userDoc.createdAt || Date.now()
+        }
+      });
+    } catch (err: any) {
+      console.error("Cabinet Login Error:", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cabinet: Request Password Reset Code (sent to email)
+  app.post("/api/cabinet/forgot-password", async (req: any, res: any) => {
+    try {
+      const { identifier } = req.body || {};
+      if (!identifier || typeof identifier !== 'string') {
+        return res.status(400).json({ error: "Вкажіть ваш email або номер телефону" });
+      }
+      const raw = identifier.trim();
+      const isEmail = raw.includes("@");
+      const normalizedDigits = raw.replace(/[^\d]/g, '');
+
+      let targetEmail = '';
+      let targetName = 'Клієнт';
+
+      if (isEmail) {
+        targetEmail = raw.toLowerCase();
+        const uSnap = await getDoc(doc(db, 'users', targetEmail));
+        if (uSnap.exists()) {
+          targetName = uSnap.data().name || targetName;
+        }
+      } else if (normalizedDigits.length >= 6) {
+        // Find email by phone from users collection
+        const usersSnap = await getDocs(collection(db, 'users'));
+        usersSnap.forEach(d => {
+          const u = d.data();
+          const uDigits = String(u.phone || '').replace(/[^\d]/g, '');
+          if (uDigits.includes(normalizedDigits) || normalizedDigits.includes(uDigits)) {
+            targetEmail = u.email;
+            targetName = u.name || targetName;
+          }
+        });
+
+        // Or fallback to orders
+        if (!targetEmail) {
+          const ordersSnap = await getDocs(collection(db, 'orders'));
+          ordersSnap.forEach(d => {
+            const ord = d.data();
+            const ordDigits = String(ord.phone || '').replace(/[^\d]/g, '');
+            if (ordDigits.includes(normalizedDigits) || normalizedDigits.includes(ordDigits)) {
+              targetEmail = ord.email;
+              targetName = ord.name || targetName;
+            }
+          });
+        }
+      }
+
+      if (!targetEmail) {
+        return res.status(404).json({ error: "Акаунт з такими даними не знайдено." });
+      }
+
+      // Generate 6-digit verification code
+      const resetCode = String(Math.floor(100000 + Math.random() * 900000));
+      const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes
+
+      await setDoc(doc(db, 'password_resets', targetEmail), {
+        code: resetCode,
+        email: targetEmail,
+        expiresAt,
+        createdAt: Date.now()
+      });
+
+      // Send email
+      const privateSnap = await getDoc(doc(db, 'settings', 'private'));
+      const pData = privateSnap.exists() ? privateSnap.data() : null;
+      const smtpUser = pData?.smtpUser || process.env.SMTP_USER || "sky.party@ukr.net";
+      const smtpPass = pData?.smtpPass || process.env.SMTP_PASS;
+      let smtpHost = pData?.smtpHost || "smtp.ukr.net";
+      let smtpPort = pData?.smtpPort ? Number(pData.smtpPort) : 465;
+
+      if (smtpPass) {
+        const userLower = smtpUser.toLowerCase().trim();
+        if (!pData?.smtpHost) {
+          if (userLower.endsWith("@gmail.com")) {
+            smtpHost = "smtp.gmail.com";
+            smtpPort = 465;
+          } else if (userLower.endsWith("@yahoo.com")) {
+            smtpHost = "smtp.mail.yahoo.com";
+            smtpPort = 465;
+          } else if (userLower.endsWith("@outlook.com") || userLower.endsWith("@hotmail.com")) {
+            smtpHost = "smtp.office365.com";
+            smtpPort = 587;
+          }
+        }
+
+        const transporter = nodemailer.createTransport({
+          host: smtpHost,
+          port: smtpPort,
+          secure: smtpPort === 465,
+          auth: { user: smtpUser, pass: smtpPass },
+          tls: { rejectUnauthorized: false }
+        });
+
+        const resetHtml = `
+          <div style="font-family: -apple-system, system-ui, sans-serif; background: #050505; color: #ffffff; padding: 40px 20px; text-align: center;">
+            <div style="max-width: 480px; margin: 0 auto; background: #0a0a0c; border-radius: 32px; border: 1px solid #1a1a1f; overflow: hidden; box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+              <div style="background: linear-gradient(135deg, #7c3aed, #4c1d95); padding: 30px 20px; text-align: center;">
+                <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase;">SKY PARTY</h1>
+                <p style="color: rgba(255,255,255,0.7); margin: 6px 0 0 0; font-size: 11px; font-weight: bold; letter-spacing: 2px;">ВІДНОВЛЕННЯ ПАРОЛЮ</p>
+              </div>
+              <div style="padding: 35px 30px; text-align: center;">
+                <p style="font-size: 15px; color: #d4d4d8; margin: 0 0 20px 0;">
+                  Вітаємо${targetName ? `, <b>${targetName}</b>` : ''}! Отримано запит на зміну паролю для вашого особистого кабінету.
+                </p>
+                <div style="background: #111115; border: 1px solid #27272a; border-radius: 20px; padding: 25px; margin: 0 0 25px 0;">
+                  <p style="font-size: 11px; color: #71717a; text-transform: uppercase; font-weight: 800; letter-spacing: 1.5px; margin: 0 0 10px 0;">ВАШ 6-ЗНАЧНИЙ КОД ПІДТВЕРДЖЕННЯ:</p>
+                  <div style="font-size: 36px; font-weight: 900; letter-spacing: 8px; color: #c084fc; font-family: monospace; padding: 10px 0;">
+                    ${resetCode}
+                  </div>
+                  <p style="font-size: 11px; color: #a1a1aa; margin: 10px 0 0 0;">
+                    ⏳ Код дійсний протягом 15 хвилин
+                  </p>
+                </div>
+                <p style="font-size: 12px; color: #52525b; margin: 0;">
+                  Якщо ви не робили цей запит, просто проігноруйте цей лист.
+                </p>
+              </div>
+              <div style="background: #050505; padding: 15px; font-size: 10px; color: #52525b; text-transform: uppercase; letter-spacing: 2px; border-top: 1px solid #1a1a1f;">
+                SKY PARTY • SECURITY SYSTEM
+              </div>
+            </div>
+          </div>
+        `;
+
+        await transporter.sendMail({
+          from: smtpUser,
+          to: targetEmail,
+          subject: `Код відновлення паролю: ${resetCode} | Sky Garden`,
+          html: resetHtml
+        });
+      }
+
+      const masked = targetEmail.replace(/(.{2})(.*)(?=@)/, (gp1, gp2, gp3) => gp2 + "*".repeat(Math.max(1, gp3.length)));
+      return res.json({
+        success: true,
+        email: targetEmail,
+        message: `Код підтвердження надіслано на ${masked}`
+      });
+    } catch (err: any) {
+      console.error("Forgot Password Error:", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cabinet: Verify Reset Code
+  app.post("/api/cabinet/verify-reset-code", async (req: any, res: any) => {
+    try {
+      const { email, code } = req.body || {};
+      if (!email || !code) {
+        return res.status(400).json({ error: "Вкажіть email та код" });
+      }
+      const normalizedEmail = email.toLowerCase().trim();
+      const resetSnap = await getDoc(doc(db, 'password_resets', normalizedEmail));
+      if (!resetSnap.exists()) {
+        return res.status(400).json({ error: "Запит на відновлення не знайдено або застарів. Спробуйте надіслати новий код." });
+      }
+      const rData = resetSnap.data() as any;
+      if (Date.now() > (rData.expiresAt || 0)) {
+        return res.status(400).json({ error: "Час дії коду вичерпано. Надішліть новий код." });
+      }
+      if (String(rData.code).trim() !== String(code).trim()) {
+        return res.status(400).json({ error: "Невірний код підтвердження" });
+      }
+      return res.json({ valid: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cabinet: Reset Password using verified code
+  app.post("/api/cabinet/reset-password", async (req: any, res: any) => {
+    try {
+      const { email, code, newPassword } = req.body || {};
+      if (!email || !code || !newPassword) {
+        return res.status(400).json({ error: "Вкажіть email, код та новий пароль" });
+      }
+      if (String(newPassword).length < 4) {
+        return res.status(400).json({ error: "Пароль повинен містити щонайменше 4 символи" });
+      }
+      const normalizedEmail = email.toLowerCase().trim();
+      const resetRef = doc(db, 'password_resets', normalizedEmail);
+      const resetSnap = await getDoc(resetRef);
+      if (!resetSnap.exists()) {
+        return res.status(400).json({ error: "Запит на відновлення застарів. Надішліть код повторно." });
+      }
+      const rData = resetSnap.data() as any;
+      if (Date.now() > (rData.expiresAt || 0)) {
+        return res.status(400).json({ error: "Час дії коду вичерпано" });
+      }
+      if (String(rData.code).trim() !== String(code).trim()) {
+        return res.status(400).json({ error: "Невірний код підтвердження" });
+      }
+
+      const userRef = doc(db, 'users', normalizedEmail);
+      const userSnap = await getDoc(userRef);
+      let existingUser: any = {};
+      if (userSnap.exists()) {
+        existingUser = userSnap.data();
+      }
+
+      const updatedUser = {
+        email: normalizedEmail,
+        phone: existingUser.phone || '',
+        name: existingUser.name || '',
+        surname: existingUser.surname || '',
+        password: String(newPassword).trim(),
+        hasCustomPassword: true,
+        tempPassword: null,
+        updatedAt: Date.now()
+      };
+
+      await setDoc(userRef, updatedUser, { merge: true });
+      await deleteDoc(resetRef);
+
+      return res.json({
+        success: true,
+        user: {
+          id: normalizedEmail,
+          email: updatedUser.email,
+          phone: updatedUser.phone,
+          name: updatedUser.name,
+          surname: updatedUser.surname,
+          hasCustomPassword: true
+        }
+      });
+    } catch (err: any) {
+      console.error("Reset Password Error:", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cabinet: Change Password in Profile
+  app.post("/api/cabinet/change-password", async (req: any, res: any) => {
+    try {
+      const { email, oldPassword, newPassword } = req.body || {};
+      if (!email || !newPassword) {
+        return res.status(400).json({ error: "Вкажіть email та новий пароль" });
+      }
+      if (String(newPassword).length < 4) {
+        return res.status(400).json({ error: "Пароль повинен містити щонайменше 4 символи" });
+      }
+      const normalizedEmail = email.toLowerCase().trim();
+      const userRef = doc(db, 'users', normalizedEmail);
+      const userSnap = await getDoc(userRef);
+
+      if (!userSnap.exists()) {
+        return res.status(404).json({ error: "Користувача не знайдено" });
+      }
+
+      const userDoc = userSnap.data() as any;
+      if (oldPassword) {
+        const oldTrimmed = String(oldPassword).trim();
+        const match = (userDoc.password && userDoc.password === oldTrimmed) || 
+                      (userDoc.tempPassword && userDoc.tempPassword === oldTrimmed);
+        if (!match) {
+          return res.status(401).json({ error: "Поточний пароль введено невірно" });
+        }
+      }
+
+      const updates = {
+        password: String(newPassword).trim(),
+        hasCustomPassword: true,
+        tempPassword: null,
+        updatedAt: Date.now()
+      };
+
+      await updateDoc(userRef, updates);
+
+      return res.json({
+        success: true,
+        user: {
+          id: normalizedEmail,
+          email: userDoc.email,
+          phone: userDoc.phone || '',
+          name: userDoc.name || '',
+          surname: userDoc.surname || '',
+          hasCustomPassword: true
+        }
+      });
+    } catch (err: any) {
+      console.error("Change Password Error:", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cabinet: Update Personal Profile (Name, Surname, Phone)
+  app.post("/api/cabinet/update-profile", async (req: any, res: any) => {
+    try {
+      const { email, name, surname, phone } = req.body || {};
+      if (!email) {
+        return res.status(400).json({ error: "Email є обов'язковим" });
+      }
+      const normalizedEmail = email.toLowerCase().trim();
+      const userRef = doc(db, 'users', normalizedEmail);
+      const userSnap = await getDoc(userRef);
+
+      let userDoc: any = {};
+      if (userSnap.exists()) {
+        userDoc = userSnap.data();
+      }
+
+      const updates = {
+        email: normalizedEmail,
+        name: typeof name === 'string' ? name.trim() : (userDoc.name || ''),
+        surname: typeof surname === 'string' ? surname.trim() : (userDoc.surname || ''),
+        phone: typeof phone === 'string' ? phone.trim() : (userDoc.phone || ''),
+        updatedAt: Date.now()
+      };
+
+      await setDoc(userRef, updates, { merge: true });
+
+      return res.json({
+        success: true,
+        user: {
+          id: normalizedEmail,
+          email: normalizedEmail,
+          name: updates.name,
+          surname: updates.surname,
+          phone: updates.phone,
+          hasCustomPassword: !!userDoc.hasCustomPassword
+        }
+      });
+    } catch (err: any) {
+      console.error("Update Profile Error:", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // User Cabinet: Fetch orders by email or phone
+  app.post("/api/cabinet/orders", async (req: any, res: any) => {
+    try {
+      const { identifier } = req.body || {};
+      if (!identifier || typeof identifier !== 'string') {
+        return res.status(400).json({ error: "Identifier is required" });
+      }
+
+      const raw = identifier.trim();
+      const isEmail = raw.includes("@");
+      const normalizedDigits = raw.replace(/[^\d]/g, '');
+
+      const ordersSnap = await getDocs(collection(db, 'orders'));
+      const matchingOrders: any[] = [];
+
+      ordersSnap.forEach((docSnap) => {
+        const data = docSnap.data() as Record<string, any>;
+        const order: any = { id: docSnap.id, ...data };
+
+        if (isEmail) {
+          if (String(order.email || '').toLowerCase().trim() === raw.toLowerCase()) {
+            matchingOrders.push(order);
+          }
+        } else if (normalizedDigits.length >= 6) {
+          const orderPhoneDigits = String(order.phone || '').replace(/[^\d]/g, '');
+          if (
+            orderPhoneDigits.includes(normalizedDigits) || 
+            normalizedDigits.includes(orderPhoneDigits) ||
+            orderPhoneDigits.slice(-9) === normalizedDigits.slice(-9)
+          ) {
+            matchingOrders.push(order);
+          }
+        }
+      });
+
+      // Enrich with event data
+      const eventsCache: Record<string, any> = {};
+      const enrichedOrders = await Promise.all(
+        matchingOrders.map(async (order) => {
+          if (!order.eventId) return order;
+          if (!eventsCache[order.eventId]) {
+            try {
+              const eventSnap = await getDoc(doc(db, 'events', order.eventId));
+              if (eventSnap.exists()) {
+                eventsCache[order.eventId] = { id: eventSnap.id, ...eventSnap.data() };
+              }
+            } catch (err) {
+              console.warn("Could not fetch event for cabinet order:", order.id);
+            }
+          }
+          return { ...order, event: eventsCache[order.eventId] };
+        })
+      );
+
+      enrichedOrders.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+      return res.json({ orders: enrichedOrders });
+    } catch (err: any) {
+      console.error("Cabinet API Error:", err.message);
+      return res.status(500).json({ error: err.message });
     }
   });
 
