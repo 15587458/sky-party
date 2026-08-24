@@ -39,7 +39,11 @@ import {
   DollarSign,
   FileText,
   Smartphone,
-  QrCode
+  QrCode,
+  Send,
+  HelpCircle,
+  MailCheck,
+  Key
 } from 'lucide-react';
 import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, serverTimestamp, query, orderBy, deleteField } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firebaseUtils';
@@ -145,6 +149,9 @@ export default function AdminDashboard() {
   const [refundCount, setRefundCount] = useState<number>(1);
   const [refundInvoiceId, setRefundInvoiceId] = useState<string>('');
   const [isRefunding, setIsRefunding] = useState<boolean>(false);
+  const [isTestingSmtp, setIsTestingSmtp] = useState<boolean>(false);
+  const [testSmtpRecipient, setTestSmtpRecipient] = useState<string>('');
+  const [showSmtpGuide, setShowSmtpGuide] = useState<boolean>(false);
 
   const toggleConfigSection = (section: string) => {
     setExpandedConfigSections(prev => 
@@ -791,6 +798,31 @@ export default function AdminDashboard() {
       setIsEditingPrivate(false);
     } catch (err: any) {
       handleFirestoreError(err, OperationType.WRITE, 'settings/private');
+    }
+  };
+
+  const handleTestSmtp = async (customRecipient?: string) => {
+    setIsTestingSmtp(true);
+    try {
+      const emailToSend = customRecipient || testSmtpRecipient || tempPrivate.smtpUser || privateSettings?.smtpUser;
+      const res = await axios.post('/api/email/test', {
+        testEmail: emailToSend,
+        smtpUser: tempPrivate.smtpUser || privateSettings?.smtpUser,
+        smtpPass: tempPrivate.smtpPass || privateSettings?.smtpPass,
+        smtpHost: tempPrivate.smtpHost || privateSettings?.smtpHost,
+        smtpPort: tempPrivate.smtpPort || privateSettings?.smtpPort,
+      });
+
+      if (res.data.success) {
+        showMessage('success', res.data.message || 'Тестовий лист успішно надіслано!');
+      } else {
+        showMessage('error', res.data.error || 'Не вдалося надіслати тестовий лист');
+      }
+    } catch (err: any) {
+      const errMsg = err.response?.data?.error || err.message || 'Помилка підключення до SMTP';
+      showMessage('error', errMsg);
+    } finally {
+      setIsTestingSmtp(false);
     }
   };
 
@@ -1630,15 +1662,30 @@ export default function AdminDashboard() {
                                   <label className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Telegram Chat ID</label>
                                   <p className="text-zinc-350 font-mono text-xs bg-zinc-950/20 py-1.5 px-2.5 rounded-lg border border-white/[0.02] w-fit">{privateSettings?.telegramChatId || 'Не налаштовано'}</p>
                                 </div>
-                                <button 
-                                  onClick={() => {
-                                    setTempPrivate(privateSettings || {});
-                                    setIsEditingPrivate(true);
-                                  }}
-                                  className="bg-zinc-800 hover:bg-zinc-700 hover:text-white text-zinc-300 font-bold py-2.5 px-4 rounded-xl text-xs uppercase border border-zinc-750/50 shadow-md active:scale-95 transition-all text-center"
-                                >
-                                  Керувати токенами
-                                </button>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={isTestingSmtp || !privateSettings?.smtpPass}
+                                    onClick={() => handleTestSmtp()}
+                                    className="bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 hover:text-white border border-purple-500/30 font-bold py-2.5 px-4 rounded-xl text-xs uppercase shadow-md active:scale-95 transition-all text-center flex items-center gap-2 disabled:opacity-40"
+                                  >
+                                    {isTestingSmtp ? (
+                                      <span className="w-3.5 h-3.5 border-2 border-purple-300 border-t-white rounded-full animate-spin" />
+                                    ) : (
+                                      <Send size={14} />
+                                    )}
+                                    {isTestingSmtp ? 'Надсилання...' : 'Тест SMTP'}
+                                  </button>
+                                  <button 
+                                    onClick={() => {
+                                      setTempPrivate(privateSettings || {});
+                                      setIsEditingPrivate(true);
+                                    }}
+                                    className="bg-zinc-800 hover:bg-zinc-700 hover:text-white text-zinc-300 font-bold py-2.5 px-4 rounded-xl text-xs uppercase border border-zinc-750/50 shadow-md active:scale-95 transition-all text-center"
+                                  >
+                                    Керувати токенами
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -3694,12 +3741,61 @@ export default function AdminDashboard() {
       {isEditingPrivate && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={() => setIsEditingPrivate(false)} />
-          <div className="relative w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-[32px] overflow-hidden shadow-2xl p-8">
-            <h3 className="text-xl font-black uppercase tracking-tight mb-6 flex items-center gap-2">
-              <SettingsIcon size={20} className="text-purple-500" />
-              Приватні Ключі
-            </h3>
-            <form onSubmit={handleSavePrivate} className="space-y-6">
+          <div className="relative w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[32px] overflow-hidden shadow-2xl p-6 sm:p-8 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4 border-b border-zinc-800 pb-3">
+              <h3 className="text-xl font-black uppercase tracking-tight flex items-center gap-2">
+                <SettingsIcon size={20} className="text-purple-500" />
+                Приватні Ключі та Пошта (SMTP)
+              </h3>
+              <button 
+                onClick={() => setIsEditingPrivate(false)}
+                className="p-2 rounded-xl hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSavePrivate} className="space-y-5 overflow-y-auto pr-1">
+              {/* How to get SMTP Password toggle / guide */}
+              <div className="bg-purple-950/20 border border-purple-500/20 rounded-2xl p-4 text-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-purple-300 font-bold">
+                    <Key size={16} />
+                    <span>Як знайти свій пароль SMTP (Пароль додатків)?</span>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setShowSmtpGuide(!showSmtpGuide)}
+                    className="text-purple-400 hover:text-purple-200 underline font-medium text-[11px]"
+                  >
+                    {showSmtpGuide ? 'Згорнути інструкцію' : 'Показати інструкцію'}
+                  </button>
+                </div>
+                {showSmtpGuide && (
+                  <div className="pt-2 border-t border-purple-500/20 space-y-3 text-zinc-300 leading-relaxed font-sans animate-in fade-in">
+                    <div>
+                      <p className="font-bold text-white mb-1">📬 Для Ukr.net:</p>
+                      <ol className="list-decimal list-inside space-y-1 text-zinc-400 ml-1">
+                        <li>Увійдіть у вашу пошту на <b className="text-white">ukr.net</b>.</li>
+                        <li>Натисніть на меню (три смужки або шестерня вгорі праворуч) → <b className="text-white">«Налаштування»</b>.</li>
+                        <li>Оберіть пункт <b className="text-white">«Керування доступом до поштової скриньки»</b> (або «Безпека»).</li>
+                        <li>Знайдіть розділ <b className="text-white">«Паролі для зовнішніх програм»</b> → натисніть <b className="text-white">«Створити пароль»</b>.</li>
+                        <li>Введіть назву (наприклад, <i>«Квитки»</i>) та скопіюйте згенерований пароль у поле <b>SMTP Password</b> нижче.</li>
+                      </ol>
+                    </div>
+                    <div>
+                      <p className="font-bold text-white mb-1">📮 Для Gmail:</p>
+                      <ol className="list-decimal list-inside space-y-1 text-zinc-400 ml-1">
+                        <li>Відкрийте <b>myaccount.google.com</b> → вкладка <b className="text-white">«Безпека»</b>.</li>
+                        <li>Увімкніть <b>«Двоетапну перевірку»</b> (якщо ще не увімкнено).</li>
+                        <li>У пошуку налаштувань знайдіть <b className="text-white">«Паролі додатків»</b> (App passwords).</li>
+                        <li>Створіть пароль для додатку «Пошта» та скопіюйте 16-значний код у поле нижче.</li>
+                      </ol>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-4">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-zinc-500 uppercase ml-1 flex items-center gap-1">
@@ -3710,27 +3806,27 @@ export default function AdminDashboard() {
                     value={tempPrivate.monobankToken || ''}
                     onChange={e => setTempPrivate({...tempPrivate, monobankToken: e.target.value})}
                     placeholder="Ваш токен monobank"
-                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono"
+                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-zinc-500 uppercase ml-1">SMTP Email (sender)</label>
+                  <label className="text-xs font-bold text-zinc-500 uppercase ml-1">SMTP Email (відправник)</label>
                   <input 
                     type="text"
                     value={tempPrivate.smtpUser || ''}
                     onChange={e => setTempPrivate({...tempPrivate, smtpUser: e.target.value})}
                     placeholder="sky.party@ukr.net"
-                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none"
+                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-zinc-500 uppercase ml-1">SMTP Password (app password)</label>
+                  <label className="text-xs font-bold text-zinc-500 uppercase ml-1">SMTP Password (пароль для зовнішніх програм)</label>
                   <input 
                     type="password"
                     value={tempPrivate.smtpPass || ''}
                     onChange={e => setTempPrivate({...tempPrivate, smtpPass: e.target.value})}
-                    placeholder="Пароль для зовнішніх додатків"
-                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono"
+                    placeholder="Пароль додатку (не звичайний пароль від пошти)"
+                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -3755,6 +3851,44 @@ export default function AdminDashboard() {
                     />
                   </div>
                 </div>
+
+                {/* Instant SMTP Test Section */}
+                <div className="p-4 bg-zinc-950/40 border border-zinc-800 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-black uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                      <MailCheck size={14} className="text-purple-400" />
+                      Перевірка надсилання листа (SMTP тест)
+                    </label>
+                  </div>
+                  <div className="flex gap-2">
+                    <input 
+                      type="email"
+                      value={testSmtpRecipient}
+                      onChange={e => setTestSmtpRecipient(e.target.value)}
+                      placeholder={tempPrivate.smtpUser || "Вкажіть email для тесту"}
+                      className="flex-1 h-11 bg-zinc-800 border border-zinc-700 rounded-xl px-3 text-xs focus:ring-2 focus:ring-purple-500 outline-none text-white"
+                    />
+                    <button
+                      type="button"
+                      disabled={isTestingSmtp || !tempPrivate.smtpPass}
+                      onClick={() => handleTestSmtp(testSmtpRecipient)}
+                      className="bg-purple-600 hover:bg-purple-500 text-white font-bold px-4 h-11 rounded-xl text-xs uppercase transition-all flex items-center gap-2 whitespace-nowrap disabled:opacity-40"
+                    >
+                      {isTestingSmtp ? (
+                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <Send size={14} />
+                      )}
+                      {isTestingSmtp ? 'Надсилання...' : 'Надіслати тест'}
+                    </button>
+                  </div>
+                  {!tempPrivate.smtpPass && (
+                    <p className="text-[10px] text-amber-400">
+                      ⚠️ Щоб протестувати пошту, введіть пароль додатку (SMTP Password).
+                    </p>
+                  )}
+                </div>
+
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-zinc-500 uppercase ml-1">Telegram Bot Token</label>
                   <input 
@@ -3762,7 +3896,7 @@ export default function AdminDashboard() {
                     value={tempPrivate.telegramBotToken || ''}
                     onChange={e => setTempPrivate({...tempPrivate, telegramBotToken: e.target.value})}
                     placeholder="Токен Telegram бота"
-                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono"
+                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm"
                   />
                 </div>
                 <div className="space-y-1">
@@ -3772,23 +3906,23 @@ export default function AdminDashboard() {
                     value={tempPrivate.telegramChatId || ''}
                     onChange={e => setTempPrivate({...tempPrivate, telegramChatId: e.target.value})}
                     placeholder="Chat ID (наприклад -100xxxxxxxxxx)"
-                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono"
+                    className="w-full h-12 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 focus:ring-2 focus:ring-purple-500 outline-none font-mono text-sm"
                   />
                 </div>
               </div>
-              <div className="pt-4 flex gap-3">
+              <div className="pt-2 flex gap-3">
                 <button 
                   type="button" 
                   onClick={() => setIsEditingPrivate(false)}
-                  className="flex-1 h-14 rounded-2xl font-bold bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                  className="flex-1 h-12 rounded-2xl font-bold bg-zinc-800 hover:bg-zinc-700 text-sm transition-colors"
                 >
                   Скасувати
                 </button>
                 <button 
                   type="submit"
-                  className="flex-1 bg-white text-black h-14 rounded-2xl font-bold hover:bg-zinc-200 transition-colors"
+                  className="flex-1 bg-white text-black h-12 rounded-2xl font-bold text-sm hover:bg-zinc-200 transition-colors"
                 >
-                  Зберегти
+                  Зберегти налаштування
                 </button>
               </div>
             </form>

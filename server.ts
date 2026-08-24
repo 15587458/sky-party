@@ -979,6 +979,121 @@ app.get("/api/health", (req, res) => {
     }
   });
 
+  // Test SMTP connection and send a test email
+  app.post("/api/email/test", async (req: any, res: any) => {
+    try {
+      let { testEmail, smtpUser, smtpPass, smtpHost: bodyHost, smtpPort: bodyPort } = req.body || {};
+
+      // Fallback to settings/private if not supplied in body
+      if (!smtpUser || !smtpPass) {
+        try {
+          const privateSnap = await getDoc(doc(db, 'settings', 'private'));
+          if (privateSnap.exists()) {
+            const pData = privateSnap.data();
+            if (!smtpUser && pData?.smtpUser) smtpUser = pData.smtpUser;
+            if (!smtpPass && pData?.smtpPass) smtpPass = pData.smtpPass;
+            if (!bodyHost && pData?.smtpHost) bodyHost = pData.smtpHost;
+            if (!bodyPort && pData?.smtpPort) bodyPort = pData.smtpPort;
+          }
+        } catch (dbErr) {
+          console.error("Error reading settings/private inside /api/email/test:", dbErr);
+        }
+      }
+
+      if (!smtpUser) smtpUser = process.env.SMTP_USER;
+      if (!smtpPass) smtpPass = process.env.SMTP_PASS;
+
+      if (!smtpUser || !smtpPass) {
+        return res.status(400).json({
+          success: false,
+          error: "Не вказано SMTP Email або пароль додатку (App Password). Будь ласка, заповніть їх у налаштуваннях."
+        });
+      }
+
+      const targetEmail = testEmail ? String(testEmail).trim() : smtpUser;
+
+      let smtpHost = bodyHost || "smtp.ukr.net";
+      let smtpPort = bodyPort ? Number(bodyPort) : 465;
+
+      const userLower = smtpUser.toLowerCase().trim();
+      if (!bodyHost) {
+        if (userLower.endsWith("@gmail.com")) {
+          smtpHost = "smtp.gmail.com";
+          smtpPort = 465;
+        } else if (userLower.endsWith("@yahoo.com")) {
+          smtpHost = "smtp.mail.yahoo.com";
+          smtpPort = 465;
+        } else if (userLower.endsWith("@outlook.com") || userLower.endsWith("@hotmail.com")) {
+          smtpHost = "smtp.office365.com";
+          smtpPort = 587;
+        }
+      }
+
+      const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpPort === 465,
+        auth: {
+          user: smtpUser,
+          pass: smtpPass,
+        },
+        tls: {
+          rejectUnauthorized: false
+        }
+      });
+
+      // Verify connection configuration
+      await transporter.verify();
+
+      // Send a rich test message
+      const info = await transporter.sendMail({
+        from: `Sky Garden <${smtpUser}>`,
+        to: targetEmail,
+        subject: "🚀 Тестовий лист від Sky Garden | SMTP перевірка",
+        html: `
+          <div style="font-family: -apple-system, system-ui, sans-serif; background: #09090b; color: #ffffff; padding: 40px 20px; text-align: center;">
+            <div style="max-width: 500px; margin: 0 auto; background: #18181b; border-radius: 28px; border: 1px solid #27272a; overflow: hidden; padding: 35px 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+              <div style="width: 56px; height: 56px; background: #10b981; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px auto; line-height: 56px; font-size: 28px;">
+                ✓
+              </div>
+              <h2 style="margin: 0 0 10px 0; font-size: 22px; font-weight: 900; color: #ffffff; text-transform: uppercase; letter-spacing: 1px;">SMTP Працює Відмінно!</h2>
+              <p style="font-size: 14px; color: #a1a1aa; line-height: 1.6; margin: 0 0 25px 0;">
+                Вітаємо! Ваші налаштування поштового сервера підключені успішно. Тепер покупці отримуватимуть квитки та коди відновлення на свої електронні адреси без затримок.
+              </p>
+              <div style="background: #09090b; border: 1px solid #27272a; border-radius: 16px; padding: 16px; text-align: left; font-size: 12px; color: #71717a; font-family: monospace;">
+                <p style="margin: 0 0 4px 0;"><b>Сервер (Host):</b> ${smtpHost}</p>
+                <p style="margin: 0 0 4px 0;"><b>Порт:</b> ${smtpPort}</p>
+                <p style="margin: 0 0 4px 0;"><b>Відправник:</b> ${smtpUser}</p>
+                <p style="margin: 0;"><b>Отримувач тесту:</b> ${targetEmail}</p>
+              </div>
+              <p style="margin-top: 25px; font-size: 11px; color: #52525b; text-transform: uppercase; letter-spacing: 2px;">
+                SKY GARDEN • СИСТЕМА ЕЛЕКТРОННИХ КВИТКІВ
+              </p>
+            </div>
+          </div>
+        `
+      });
+
+      return res.json({
+        success: true,
+        message: `Тестовий лист успішно надіслано на ${targetEmail}!`,
+        messageId: info.messageId
+      });
+    } catch (err: any) {
+      console.error("SMTP Test Error:", err);
+      let errorHint = err.message || "Невідома помилка підключення до SMTP";
+      if (errorHint.includes("535") || errorHint.includes("BadCredentials") || errorHint.includes("Username and Password not accepted") || errorHint.includes("Invalid login")) {
+        errorHint = "Помилка авторизації (535): Невірний логін або пароль. Для Ukr.net чи Gmail потрібно створити спеціальний «Пароль для зовнішніх програм» у налаштуваннях пошти, а не вводити звичайний пароль від акаунту.";
+      } else if (errorHint.includes("ETIMEDOUT") || errorHint.includes("ECONNREFUSED") || errorHint.includes("ENOTFOUND")) {
+        errorHint = `Помилка з'єднання з поштовим сервером (${err.code || 'Мережева помилка'}). Перевірте правильність SMTP Host та порту (зазвичай 465 з SSL).`;
+      }
+      return res.status(400).json({
+        success: false,
+        error: errorHint
+      });
+    }
+  });
+
   // ==========================================
   // USER CABINET & AUTHENTICATION ENDPOINTS
   // ==========================================
